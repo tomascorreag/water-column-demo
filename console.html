@@ -24,7 +24,7 @@
 <div id="introcard">
   <div class="ic-eyebrow" id="ic-eyebrow">welcome to</div>
   <h2 class="ic-title" id="ic-title">the water<br>column</h2>
-  <p class="ic-about" id="ic-about">A concept demo of ocean measurements as a navigable volume.</p>
+  <p class="ic-about" id="ic-about">A concept demo built for the OceanX Science Impact Challenge. The data is real and public; every representation of it here is conceptual, a sketch toward a future tool rather than a working instrument.</p>
   <div class="ic-rule" id="ic-rule"></div>
   <dl class="ic-log" id="ic-log"></dl>
   <div class="ic-foot">
@@ -50,7 +50,7 @@
   </div>
   <!-- showcase only: the source line reads as a footnote to the title -->
   <div id="prov-short">
-    Public data, no OceanX data used.
+    Concept demo: the data is real and public, every representation of it is conceptual. No OceanX data used.
     Colour is temperature; how solid something is drawn is how much measurement stands behind it.
     <a href="https://erddap.ifremer.fr/erddap/tabledap/ArgoFloats.html" target="_blank" rel="noopener">Argo via Ifremer ERDDAP</a> &middot;
     <a href="https://www.gebco.net/" target="_blank" rel="noopener">GEBCO_2021</a> &middot;
@@ -60,6 +60,10 @@
 </div>
 
 <canvas id="gizmo" title="click an axis to snap the view · centre = isometric"></canvas>
+<!-- showcase only: the one navigation aid there is. A compass rose lying on
+     the sea surface, drawn through the live camera; click it for the map view
+     the demo opened on, click it again to come back. -->
+<canvas id="compass" title="map view"></canvas>
 
 <div id="exag-badge">&times;<span id="exag-val"></span></div>
 <div id="unc-badge"></div>

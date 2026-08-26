@@ -104,6 +104,20 @@ body { font-size: 1rem; }
 
 #gizmo { grid-area: top; justify-self: end; align-self: start; border-radius: 50%; }
 
+/* the showcase's compass. No panel and no plate of its own: the rose is drawn
+   straight onto the scene, which is where it claims to be lying. It shares the
+   guide's cell rather than taking one of its own -- the card is pinned to the
+   top of that column and this to the bottom of it, so the compass ends up in
+   the corner of the window just above the bottom band, and the two can only
+   meet if the free row gets shorter than both of them. The `top` cell is the
+   fallback for the layouts that have no free room in the right column. */
+#compass { display: none; }
+body.showcase #compass {
+  display: block; grid-area: top; justify-self: end; align-self: start;
+  width: 84px; height: 84px; cursor: pointer;
+}
+body:not(.mobile).showcase #compass { grid-area: guide; align-self: end; }
+
 /* the badges are centred on the viewport, not on a column: they annotate the
    scene, which is full-width */
 #exag-badge, #unc-badge {
@@ -212,7 +226,7 @@ button#btn-true, button#btn-clear {
    figures). min keeps the legend and the exaggeration badge. */
 body.figure #tour, body.figure #rail, body.figure #insets, body.figure #timeline,
 body.figure #title, body.figure #prov-box, body.figure #readout,
-body.figure #gizmo { display: none !important; }
+body.figure #gizmo, body.figure #compass { display: none !important; }
 body.figure.nolegend #legend { display: none !important; }
 /* the 3D tag on the pycnocline / iso-surface: it names the object, which a
    figure caption does instead. Depth and graticule labels stay. */
@@ -226,9 +240,10 @@ body.nogrid #labels { display: none !important; }
    Everything that makes this an instrument rather than a demonstration is
    removed: the control rail, the axis gizmo, the mode switch, the method
    note. Navigation is rotate, zoom and the playhead. The left column is the
-   guide over the toggles over the colour legend over the plots, so the
-   layers, what their colour means and what a click on one gives are read in
-   one column; the timeline has the rest of the bottom edge. */
+   toggles over the colour legend over the plots, so the layers, what their
+   colour means and what a click on one gives are read in one column; the
+   walkthrough card has the right column to itself; the timeline has the rest
+   of the bottom edge. */
 #prov-short, .sc-toggles { display: none; }
 body.showcase #rail,
 body.showcase #gizmo,
@@ -236,12 +251,13 @@ body.showcase #prov-box,
 body.showcase #legend .keys,
 body.showcase #title .modes { display: none !important; }
 body.showcase #hud {
+  grid-template-columns: var(--left-w) minmax(0, 1fr) var(--guide-w);
   grid-template-rows: auto minmax(0, 1fr) auto auto auto;
   grid-template-areas:
-    "title  top    top"
-    "guide  .      ."
-    "tour   .      ."
-    "legend .      ."
+    "title  top    guide"
+    ".      .      guide"
+    "tour   .      guide"
+    "legend .      guide"
     "insets tl     tl";
 }
 body.showcase #title { width: var(--guide-w); }
@@ -255,14 +271,44 @@ body.showcase #legend { width: var(--tour-w); }
 
 /* ---------- the guide ----------
    Inverted on purpose: this is a layer over the instrument, not another one of
-   its panels, and the inversion is what says so without a label. */
+   its panels, and the inversion is what says so without a label.
+
+   It sits in the right column, on its own, from the top edge down: the left
+   column is the tour, the toggles, the ramp and the plots stacked into one
+   scrolling-height budget, and the card was the top of that stack, so a short
+   viewport gave it a scrollbar. Nothing else is in the right column, so the
+   card is bounded by the whole free row instead of by what is under it, and
+   `overflow: visible` is safe -- which it has to be, because the attention
+   wave below is drawn outside the box. */
 #guide { display: none; }
 body.showcase #guide {
   display: block; grid-area: guide; width: var(--guide-w); align-self: start;
-  max-height: 100%; overflow-y: auto;
+  justify-self: end; position: relative; overflow: visible;
   background: var(--ink-panel); color: var(--on-ink);
   border-radius: 10px; padding: 15px 18px 14px;
   box-shadow: 0 12px 34px rgba(23, 27, 33, .20), inset 0 1px 0 rgba(255, 255, 255, .06);
+}
+
+/* ---------- the wave ----------
+   The card is off to one side while the eye is in the middle of the scene, so
+   it needs a way to say "this changed, read me". Two rings shed from its edge
+   in the accent the focus ring already uses, so it is the same instruction and
+   not a second language. app.js runs it on a new step, and again if a step's
+   action has not come after a while -- never continuously: a thing that always
+   pulses stops meaning anything, and the focus ring is usually pointing at the
+   control the step is about, which this must not compete with. */
+body:not(.mobile).showcase #guide::before,
+body:not(.mobile).showcase #guide::after {
+  content: ''; position: absolute; inset: -3px; border-radius: 13px;
+  border: 1.5px solid var(--accent); opacity: 0; pointer-events: none;
+}
+body:not(.mobile).showcase #guide.nudge::before { animation: guidewave 2.3s ease-out 3; }
+body:not(.mobile).showcase #guide.nudge::after { animation: guidewave 2.3s ease-out .95s 3; }
+@keyframes guidewave {
+  0% { transform: scale(.99); opacity: 0; }
+  14% { opacity: .5; }               /* fades up first: starting lit would read
+                                        as the card growing a border */
+  100% { transform: scale(1.06); opacity: 0; }
 }
 .g-head { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
 .g-num { font-family: var(--mono); font-size: .846rem; letter-spacing: .22em; color: var(--accent-lift); }
@@ -438,9 +484,9 @@ body.showcase #callout {
   body.showcase #hud {
     grid-template-rows: auto minmax(0, 1fr) auto auto;
     grid-template-areas:
-      "title  top    top"
-      "guide  .      ."
-      "tour   .      ."
+      "title  top    guide"
+      ".      .      guide"
+      "tour   .      guide"
       "insets tl     legend";
   }
   body.showcase #legend { justify-self: end; }
@@ -449,6 +495,12 @@ body.showcase #callout {
 @media (max-height: 699px) {
   :root { --plot-h: 11.5rem; }
   #insets .hint { display: none; }
+  /* the free row is under ~250 px here: the card can no longer be taller than
+     its cell whatever it says, so the scrollbar comes back as a safety valve
+     and the wave goes -- it would be drawn into the clip */
+  body:not(.mobile).showcase #guide { max-height: 100%; overflow-y: auto; }
+  body:not(.mobile).showcase #guide.nudge::before,
+  body:not(.mobile).showcase #guide.nudge::after { animation: none; }
 }
 
 /* degrade band: below the 1280 target. Smaller still; the console timeline
@@ -467,12 +519,13 @@ body.showcase #callout {
   #title .sub { display: none; }
   #legend .keys { display: none; }
   #gizmo { display: none; }   /* the centre column is ~280 px: badge or gizmo, not both */
+  body.showcase #compass { width: 68px; height: 68px; }
   body.showcase #hud {
     grid-template-rows: auto minmax(0, 1fr) auto auto;
     grid-template-areas:
-      "title  top    top"
-      "guide  .      ."
-      "tour   .      ."
+      "title  top    guide"
+      ".      .      guide"
+      "tour   .      guide"
       "insets tl     tl";
   }
   body:not(.mobile).showcase #legend { display: none !important; }
@@ -541,6 +594,7 @@ body.mobile.showcase #hud {
     "tl    tl   ";
 }
 body.mobile #gizmo, body.mobile #prov-short { display: none !important; }
+body.mobile.showcase #compass { width: 54px; height: 54px; }
 body.mobile #title { width: auto; }
 body.mobile #title h1 { font-size: 1.08rem; }
 body.mobile #title .sub { display: none; }
@@ -557,7 +611,7 @@ body.mobile #unc-badge {
 }
 
 body.mobile #guide {
-  grid-area: guide; width: auto; align-self: end;
+  grid-area: guide; width: auto; align-self: end; justify-self: stretch;
   max-height: 42vh; overflow-y: auto; padding: 12px 14px 11px;
 }
 body.mobile #ftue-text { font-size: .96rem; line-height: 1.5; }
