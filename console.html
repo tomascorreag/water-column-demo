@@ -2,13 +2,22 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Water Column Console</title>
 <link rel="stylesheet" href="style.css">
 </head>
 <body class="explain">
 
 <div id="scene"></div>
+
+<!-- small-screen notice. Shown only when app.js has put `mobile` on <body>;
+     the console is a large-screen, mouse-and-wheel instrument and saying so is
+     better than letting a phone discover it. Dismissal is remembered for the
+     tab, not forever: a reload after a rotation should not re-nag. -->
+<div id="mobilenote">
+  <div class="mn-body"><b>Better on a computer.</b> This is a 3D console built for a large screen, a mouse and a scroll wheel. On a phone the layout is folded down and it runs slower &mdash; what it draws is the same data, from the same code.</div>
+  <button id="mn-close">Got it</button>
+</div>
 
 <!-- opening card: the page introduces itself the way a cast sheet does. Every
      value is read out of the loaded dataset, never typed in. -->
@@ -27,21 +36,36 @@
 <div id="callout"></div>
 <div id="labels"></div>
 
-<div class="hud" id="title">
+<!-- the HUD is one grid over the scene; every panel is a direct child and is
+     placed by grid-area, per mode and per breakpoint, in style.css. Nothing in
+     here is position: fixed, so the reveal transform on a panel can never
+     become the containing block of another. -->
+<div id="hud">
+
+<div id="title">
   <h1>Water column console</h1>
   <div class="sub">83 Argo profiles &middot; 39 floats &middot; NW Atlantic (Gulf Stream / Sargasso Sea) &middot; June 2023</div>
   <div class="modes" role="tablist">
     <button id="mode-explain" class="on">Explain</button><button id="mode-expert">Expert</button>
   </div>
+  <!-- showcase only: the source line reads as a footnote to the title -->
+  <div id="prov-short">
+    Public data, no OceanX data used.
+    Colour is temperature; how solid something is drawn is how much measurement stands behind it.
+    <a href="https://erddap.ifremer.fr/erddap/tabledap/ArgoFloats.html" target="_blank" rel="noopener">Argo via Ifremer ERDDAP</a> &middot;
+    <a href="https://www.gebco.net/" target="_blank" rel="noopener">GEBCO_2021</a> &middot;
+    layer after <a href="https://doi.org/10.1029/2018JC014526" target="_blank" rel="noopener">Feucher et al. 2019</a>,
+    mapped by <a href="https://currents.soest.hawaii.edu/ocn_data_analysis_files/Bretherton.1976.pdf" target="_blank" rel="noopener">objective analysis</a>.
+  </div>
 </div>
 
-<canvas class="hud" id="gizmo" title="click an axis to snap the view · centre = isometric"></canvas>
+<canvas id="gizmo" title="click an axis to snap the view · centre = isometric"></canvas>
 
-<div class="hud" id="exag-badge">&times;<span id="exag-val"></span></div>
-<div class="hud" id="unc-badge"></div>
+<div id="exag-badge">&times;<span id="exag-val"></span></div>
+<div id="unc-badge"></div>
 
 <!-- guided tour (explain mode) -->
-<div class="hud panel" id="tour">
+<div class="panel" id="tour">
   <div class="steps" id="tour-steps"></div>
   <div class="sc-toggles" id="sc-toggles">
     <label id="row-casts"><input type="checkbox" id="sc-casts" checked> Profiles (measured)</label>
@@ -53,7 +77,7 @@
 
 <!-- the walkthrough is its own layer, not another instrument panel: inverted,
      so it reads as something over the tool rather than part of it -->
-<div class="hud" id="guide">
+<div id="guide">
   <div class="g-head">
     <span class="g-num" id="g-num">01</span>
     <span class="g-rule"></span>
@@ -68,11 +92,8 @@
   </div>
 </div>
 
-<div id="focus"></div>
-<div id="draghint">&#9664; drag &#9654;</div>
-
 <!-- control rail -->
-<div class="hud panel" id="rail">
+<div class="panel" id="rail">
   <h2>Colour by</h2>
   <div class="seg" id="var-seg">
     <button data-var="temp" class="on">Temp</button><button data-var="psal">Salinity</button><button data-var="sigma0">&sigma;&#8320;</button><button data-var="conf">Support</button>
@@ -118,29 +139,17 @@
   <div class="row expert-only"><button id="btn-clear">clear pinned profiles</button></div>
 </div>
 
-<!-- 2D linked views -->
-<div class="hud panel" id="insets">
+<!-- 2D linked views. The plot boxes are sized in CSS (--plot-w / --plot-h);
+     app.js reads the box and allocates the bitmap to match. -->
+<div class="panel" id="insets">
   <div class="inset"><div class="cap">Temperature profile</div><canvas id="p-temp"></canvas></div>
   <div class="inset"><div class="cap">Salinity profile</div><canvas id="p-psal"></canvas></div>
   <div class="inset"><div class="cap">T&ndash;S diagram &middot; grey lines &sigma;&#8320;</div><canvas id="p-ts"></canvas></div>
   <div class="hint">hover a tube to trace it, click to pin (up to 3). Grey = all 83 profiles.</div>
 </div>
 
-<!-- legend + provenance: one bottom-right column, so a longer note pushes the
-     legend up instead of printing over it -->
-<div class="hud" id="rightcol">
-<div class="panel" id="legend">
-  <div class="cap" id="lg-title"></div>
-  <canvas id="lg-vsup" width="282" height="118"></canvas>
-  <div class="note" id="lg-note"></div>
-  <div class="keys">
-    <span><i class="dot d"></i>delayed-mode cast (calibrated, &plusmn;0.002&thinsp;&deg;C)</span>
-    <span><i class="dot r"></i>real-time cast (uncalibrated, nominal &plusmn;0.02&thinsp;&deg;C)</span>
-  </div>
-</div>
-
 <!-- timeline -->
-<div class="hud panel" id="timeline">
+<div class="panel" id="timeline">
   <div class="tl-head">
     <button id="btn-play">&#9654; play</button>
     <button id="btn-alltime">back to timeline</button>
@@ -151,18 +160,22 @@
   <div class="tl-note" id="tl-note"></div>
 </div>
 
-<div id="readout" class="hud"></div>
-
-<div id="prov-short">
-  Public data, no OceanX data used.
-  Colour is temperature; how solid something is drawn is how much measurement stands behind it.
-  <a href="https://erddap.ifremer.fr/erddap/tabledap/ArgoFloats.html" target="_blank" rel="noopener">Argo via Ifremer ERDDAP</a> &middot;
-  <a href="https://www.gebco.net/" target="_blank" rel="noopener">GEBCO_2021</a> &middot;
-  layer after <a href="https://doi.org/10.1029/2018JC014526" target="_blank" rel="noopener">Feucher et al. 2019</a>,
-  mapped by <a href="https://currents.soest.hawaii.edu/ocn_data_analysis_files/Bretherton.1976.pdf" target="_blank" rel="noopener">objective analysis</a>.
+<div class="panel" id="legend">
+  <div class="cap" id="lg-title"></div>
+  <canvas id="lg-vsup" width="282" height="118"></canvas>
+  <div class="note" id="lg-note"></div>
+  <div class="keys">
+    <span><i class="dot d"></i>delayed-mode cast (calibrated, &plusmn;0.002&thinsp;&deg;C)</span>
+    <span><i class="dot r"></i>real-time cast (uncalibrated, nominal &plusmn;0.02&thinsp;&deg;C)</span>
+  </div>
 </div>
 
-<div id="provenance">
+<!-- method note. Open on a large screen; on a small one it folds to its
+     summary line and the legend and rail get the height (app.js sets `open`
+     from a media query) -->
+<details id="prov-box">
+  <summary>method &amp; provenance</summary>
+  <div id="provenance">
   Argo (Ifremer ERDDAP), ascending casts, QC flags 1&ndash;2, 5-dbar bins. Field between casts:
   anisotropic Gaussian kernel, L<sub>h</sub>&thinsp;=&thinsp;25&thinsp;km, L<sub>v</sub>&thinsp;=&thinsp;30&thinsp;dbar.
   &ldquo;Support&rdquo; = normalised kernel weight, a geometry-only proxy, not a formal error.
@@ -178,8 +191,20 @@
   estimate at an instant uses casts either side of it), L<sub>t</sub> fitted from these casts.
   The uncertainty-weight slider suppresses that encoding for comparison; below 1 the render overstates what was measured
   and says so in the badge. <span id="prov-unc"></span>
-</div>
-</div>
+  </div>
+</details>
+
+<!-- mobile only: the panels that do not fit a phone's bottom edge are moved in
+     here by app.js and slide up over the scene. Empty and display:none on a
+     desktop, so it costs the normal layout nothing. -->
+<button id="sheet-btn" aria-expanded="false">Controls</button>
+<div id="sheet"></div>
+
+</div><!-- #hud -->
+
+<div id="focus"></div>
+<div id="draghint">&#9664; drag &#9654;</div>
+<div id="readout"></div>
 
 <script src="bathy.js"></script>
 <script src="data.js"></script>

@@ -26,30 +26,30 @@ if (SHOWCASE) {
   // every panel starts hidden; the introduction is the only thing that reveals
   // them, one step at a time
   for (const id of ['title', 'exag-badge', 'guide', 'tour', 'row-casts', 'row-thermo',
-    'row-bathy', 'insets', 'timeline', 'rightcol', 'legend'])
+    'row-bathy', 'insets', 'timeline', 'legend'])
     document.getElementById(id).classList.add('rv');
-  // the guide has the top of the left side to itself; the bottom of it is one
-  // stack, toggles over the colour legend over the plots, so the layers, what
-  // their colour means and what a click on one gives are read in one column
-  {
-    const col = document.createElement('div');
-    col.id = 'leftcol';
-    document.getElementById('tour').before(col);
-    col.append(document.getElementById('guide'));
-    const stack = document.createElement('div');
-    stack.id = 'leftstack';
-    document.getElementById('insets').before(stack);
-    stack.append(document.getElementById('tour'), document.getElementById('legend'), document.getElementById('insets'));
-    // the timeline is fixed-positioned but lives inside #rightcol, whose reveal
-    // transform makes it the containing block mid-transition: pull it out
-    document.getElementById('rightcol').before(document.getElementById('timeline'));
-    // the source line reads as a footnote to the title, not as a corner of its own
-    document.getElementById('title').append(document.getElementById('prov-short'));
-  }
+  // where each panel sits is style.css's business (one grid, grid-area per
+  // mode and breakpoint): the guide has the top of the left column, the
+  // toggles, the colour legend and the plots stack at its foot, and the
+  // timeline has the rest of the bottom edge
   document.querySelector('#title h1').textContent = 'Water column walkthrough';
   document.querySelector('#title .sub').textContent =
     '83 Argo profiles · north-west Atlantic · June 2023 · rotate with the mouse, zoom with the wheel';
 }
+
+// ---------- small screen ----------
+// One definition of "small", shared by the layout (style.css keys on
+// body.mobile and nothing there keys on a width), the input model (a touch
+// screen has no hover, so nothing may be told only by hovering) and the
+// notice. The short-viewport half is qualified by a coarse pointer so that a
+// desktop window dragged flat does not become a phone. ?mobile=1 forces it for
+// testing on a desktop, ?mobile=0 suppresses it so a scripted capture at a
+// small window still gets the full console.
+const MOBILE_MQ = matchMedia('(max-width: 820px), ((max-height: 460px) and (pointer: coarse))');
+const MOBILE_FORCE = new URLSearchParams(location.search).get('mobile');
+let MOBILE = MOBILE_FORCE === '1' ? true : MOBILE_FORCE === '0' ? false : MOBILE_MQ.matches;
+const MOBILE_AT_LOAD = MOBILE;
+document.body.classList.toggle('mobile', MOBILE);
 
 // ---------- data decoding ----------
 
@@ -372,7 +372,7 @@ const modeName = m => ({ D: 'delayed-mode (calibrated)', A: 'adjusted', R: 'real
 THREE.ColorManagement.enabled = false;             // hex/float colours are display values as written
 const container = document.getElementById('scene');
 const renderer = new THREE.WebGLRenderer({ antialias: true });
-renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setPixelRatio(Math.min(devicePixelRatio, MOBILE ? 1.5 : 2));
 renderer.setSize(innerWidth, innerHeight);
 renderer.outputColorSpace = THREE.LinearSRGBColorSpace;   // colours are display values
 renderer.setClearColor(0xe4e7eb, 1);
@@ -386,8 +386,32 @@ let camera = persp;                                // swapped to ortho on gizmo 
 // viewport sits behind the panels. setViewOffset shifts the rendered window
 // rather than the camera, so orbiting still turns about the domain centre and
 // the projected DOM labels follow without a second correction.
+// The constants were tuned at 1920x1080, where the left column takes 0.33 of
+// the width and the bottom band 0.24 of the height. On any other viewport the
+// shift scales with the fraction the HUD actually takes, read off the laid-out
+// panels: a .rv panel is laid out at opacity 0, so this is valid before
+// anything is revealed.
 const SC_SHIFT_X = 0.045, SC_SHIFT_Y = 0.10;        // fractions of the viewport: right, up
+const SC_REF = { l: 0.33, b: 0.24 };
+const scBase = { x: SC_SHIFT_X, y: SC_SHIFT_Y };    // the working view's shift on this viewport
 const scShift = { x: SC_SHIFT_X, y: SC_SHIFT_Y };   // live: the opening frames the chart elsewhere
+function computeViewShift() {
+  if (!SHOWCASE) return;
+  // on a phone the HUD is one column across the bottom, so there is no left
+  // column to shift out of; the plots are inside a sheet that is translated
+  // off-screen while closed and would report a meaningless rect anyway
+  if (MOBILE) { scBase.x = 0; scBase.y = 0.12; return; }
+  const rect = id => {
+    const el = document.getElementById(id);
+    return el && getComputedStyle(el).display !== 'none' ? el.getBoundingClientRect() : null;
+  };
+  let l = 0, top = innerHeight;
+  for (const id of ['guide', 'tour', 'insets']) { const r = rect(id); if (r && r.width) l = Math.max(l, r.right); }
+  for (const id of ['insets', 'timeline']) { const r = rect(id); if (r && r.height) top = Math.min(top, r.top); }
+  const lf = l / innerWidth, bf = (innerHeight - top) / innerHeight;
+  scBase.x = Math.min(0.12, Math.max(0.03, SC_SHIFT_X * lf / SC_REF.l));
+  scBase.y = Math.min(0.16, Math.max(0.05, SC_SHIFT_Y * bf / SC_REF.b));
+}
 function applyViewShift() {
   if (!SHOWCASE) return;
   const w = innerWidth, h = innerHeight;
@@ -701,20 +725,42 @@ const TUBE_AFLOOR = 0;
 // costs the correct blend where two tubes overlap and buys back the geometry.
 let hoveredCast = null;
 const pins = [];                                   // cast indices, max 3
-const tubeMat = new THREE.MeshBasicMaterial({ vertexColors: true, transparent: true, depthWrite: true });
-// ...but a faded tube is a decayed claim, not a wall. With depthWrite on it
-// still punched a tube-shaped hole through the thermocline behind it, which is
-// the opposite of what the fade means. Anything below full weight uses this
-// material instead and takes three.js's back-to-front transparent sort; the
-// opaque ones keep depth writes, so the geometry stays readable where it
-// matters. The whole tube carries one weight, so this is a per-mesh choice.
-const tubeMatFade = new THREE.MeshBasicMaterial({ vertexColors: true, transparent: true, depthWrite: false });
+// Tube against sheet is the one place this scene needs per-pixel transparency
+// ordering. Three sorts transparent objects by the depth of the object's
+// origin, and every tube and every sheet here has its geometry in world
+// coordinates with the mesh at the origin, so they all tie and the order is
+// creation order: tubes, then sheets. A tube that writes depth is then
+// correctly in front of the sheet where it is nearer; a tube that does not is
+// painted over by the sheet everywhere. Two materials switched at a weight of
+// 0.995 gave the first to opaque tubes and the second to faded ones, and the
+// switch was a visible snap: a tube at 0.99 lost the sheet's occlusion in one
+// frame.
+//
+// With MSAA on, alpha-to-coverage does it per sample instead: the tube covers
+// a fraction alpha of each pixel's samples and writes depth for those only, so
+// a sheet drawn afterwards fills the rest where the tube is in front and
+// blends over all of them where it is behind. Both cases come out as the exact
+// blend, for every weight, with one material and no threshold. The cost is
+// that alpha is quantised to the sample count (dithered on most GPUs), so a
+// faded tube reads as a fine stipple rather than a smooth wash. The material
+// is not `transparent`: alpha drives coverage and must not also blend, and the
+// opaque list is drawn before every sheet, which is the order required.
+// Without MSAA, alpha-to-coverage degrades to a 0.5 cutoff, so the two-material
+// scheme is kept as the fallback there.
+const MSAA = (() => { const gl = renderer.getContext(); return gl.getParameter(gl.SAMPLES) > 0; })();
+const tubeMat = MSAA
+  ? new THREE.MeshBasicMaterial({ vertexColors: true, alphaToCoverage: true, depthWrite: true })
+  : new THREE.MeshBasicMaterial({ vertexColors: true, transparent: true, depthWrite: true });
+// fallback only: a faded tube is a decayed claim, not a wall, so below full
+// weight it stops writing depth and takes the transparent sort
+const tubeMatFade = MSAA ? tubeMat
+  : new THREE.MeshBasicMaterial({ vertexColors: true, transparent: true, depthWrite: false });
 // Hover and pin brighten the cast rather than recolouring it: the ramp is the
 // data and must not move. material.color multiplies the vertex colour, and
 // THREE.Color does not clamp, so a value above 1 lifts the whole tube toward
 // the top of the ramp without changing which end of it a depth sits at.
-const tubeMatHi = new THREE.MeshBasicMaterial({ vertexColors: true, transparent: true, depthWrite: true });
-const tubeMatFadeHi = new THREE.MeshBasicMaterial({ vertexColors: true, transparent: true, depthWrite: false });
+const tubeMatHi = tubeMat.clone();
+const tubeMatFadeHi = MSAA ? tubeMatHi : tubeMatFade.clone();
 tubeMatHi.color.setRGB(1.45, 1.45, 1.45);
 tubeMatFadeHi.color.setRGB(1.45, 1.45, 1.45);
 const isHi = ci => ci === hoveredCast || pins.includes(ci);
@@ -1082,6 +1128,10 @@ function buildIsoSheets() {
   const { geo, pos, alp, vid } = heightSurface(median3x3(expandFine(cDepth)), infl, isoVertexColor, supportAlpha, SLOPE_MAX);
   isoGroup.add(new THREE.Mesh(geo, isoMat));
   isoGroup.add(fishnet({ pos, alp, vid }, ISO_STEP, SLOPE_MAX));
+  // the sheets all sit at the origin, so among themselves three's transparent
+  // sort falls back to object id, i.e. whichever was rebuilt last. Pinned to
+  // the order the per-tick rebuild used to give: iso-surface, then the layer.
+  for (const m of isoGroup.children) m.renderOrder = 1;
   // label the shallowest well-supported point on the surface
   let best = null;
   for (let i = 0; i < FX * FY; i++) {
@@ -1928,6 +1978,7 @@ function buildThermo() {
   });
   if (places.length) thermoGroup.add(new THREE.Mesh(mergedCylinders(collar, places), cmat));
   collar.dispose();
+  for (const m of thermoGroup.children) m.renderOrder = 2;   // after the iso-surface, see buildIsoSheets
   let best = null;
   for (let i = 0; i < FN; i++) {
     if (LF.inc[i] !== 1) continue;
@@ -2218,14 +2269,20 @@ function updateSection(axis, val) {
 // ---------- 2D linked views: T(p), S(p), T-S ----------
 
 const DPR2 = Math.min(devicePixelRatio || 1, 2);
-const PW = 190, PH = 200;
 const panels = {};
-for (const id of ['p-temp', 'p-psal', 'p-ts']) {
-  const cv = document.getElementById(id);
-  cv.width = PW * DPR2; cv.height = PH * DPR2;
-  cv.style.width = PW + 'px'; cv.style.height = PH + 'px';
-  panels[id] = cv;
+for (const id of ['p-temp', 'p-psal', 'p-ts']) panels[id] = document.getElementById(id);
+// the plot box is set in CSS (--plot-w / --plot-h, per breakpoint) and the
+// bitmap follows the box; frameOf/axes read the bitmap, so nothing below needs
+// to know the size. A hidden panel (figure mode) measures 0 and keeps its bitmap.
+function sizeInsets() {
+  for (const cv of Object.values(panels)) {
+    const r = cv.getBoundingClientRect();
+    if (!r.width || !r.height) continue;
+    const w = Math.round(r.width * DPR2), h = Math.round(r.height * DPR2);
+    if (cv.width !== w || cv.height !== h) { cv.width = w; cv.height = h; }
+  }
 }
+sizeInsets();
 const PM = { l: 34, r: 8, t: 8, b: 20 };           // css px margins
 const PIN_COLORS = ['#d97706', '#db2777', '#059669'];
 const pinLabels = [];
@@ -2339,7 +2396,7 @@ function drawLegend() {
   document.getElementById('lg-title').textContent = `${d.name} · ${d.unit}`;
   const cv = document.getElementById('lg-vsup');
   const dpr = Math.min(devicePixelRatio || 1, 2);
-  const W = 282, H = 118;
+  const W = Math.round(cv.clientWidth) || 282, H = 118;   // the panel's width; 282 only if hidden
   cv.width = W * dpr; cv.height = H * dpr; cv.style.height = H + 'px';
   const ctx = cv.getContext('2d');
   ctx.scale(dpr, dpr);
@@ -2715,7 +2772,7 @@ const tlT = (px, W) => T.tMin + (px - TL_PADL) / (W - TL_PADL - TL_PADR) * (T.tM
 
 function drawTimeline() {
   const cv = tl.cv, dpr = Math.min(devicePixelRatio || 1, 2);
-  const W = Math.max(360, cv.clientWidth || cv.parentElement.clientWidth - 24);
+  const W = Math.max(200, cv.clientWidth || cv.parentElement.clientWidth - 20);
   if (cv.width !== W * dpr || cv.height !== TL_H * dpr) { cv.width = W * dpr; cv.height = TL_H * dpr; }
   cv.style.height = TL_H + 'px';
   const ctx = cv.getContext('2d');
@@ -3006,6 +3063,18 @@ gizmo.addEventListener('pointermove', ev => {
 const raycaster = new THREE.Raycaster();
 const pointer = new THREE.Vector2();
 const readout = $('readout');
+// the readout keeps to the viewport: right of the pointer while there is room,
+// else left of it, and the same below/above. Its content (so its size) is set
+// after the position, so frame() re-runs this before the paint.
+const readoutAt = { x: 0, y: 0 };
+function placeReadout() {
+  if (readout.style.display !== 'block') return;
+  const w = readout.offsetWidth, h = readout.offsetHeight;
+  let x = readoutAt.x + 14, y = readoutAt.y + 10;
+  if (x + w > innerWidth - 6) x = Math.max(6, readoutAt.x - 14 - w);
+  if (y + h > innerHeight - 6) y = Math.max(6, readoutAt.y - 10 - h);
+  readout.style.left = x + 'px'; readout.style.top = y + 'px';
+}
 const kv = (k, v) => `<span class="k">${k}</span> ${v}`;
 function setHover(ci) {
   if (hoveredCast === ci) return;
@@ -3046,16 +3115,18 @@ function syncPins() {
   });
   drawInsets();
 }
-renderer.domElement.addEventListener('pointermove', ev => {
+// Filling the readout is its own function because a mouse raises it by
+// hovering and a finger has to raise it by tapping — same content, two events.
+function showReadout(ev) {
   const pk = pickAt(ev);
   if (!pk) {
     readout.style.display = 'none';
     setHover(null);
-    return;
+    return false;
   }
   readout.style.display = 'block';
-  readout.style.left = (ev.clientX + 14) + 'px';
-  readout.style.top = (ev.clientY + 10) + 'px';
+  readoutAt.x = ev.clientX; readoutAt.y = ev.clientY;
+  placeReadout();
   if (pk.kind === 'cast') {
     const ci = pk.hit.object.userData.ci, c = casts[ci];
     const pres = -pk.hit.point.y / exag * 1000;
@@ -3092,17 +3163,42 @@ renderer.domElement.addEventListener('pointermove', ev => {
       kv('support', `${s.conf.toFixed(2)} (${sup})`);
     setHover(null);
   }
+  return true;
+}
+const hideReadout = () => { readout.style.display = 'none'; setHover(null); };
+// A touch drag fires pointermove throughout, so hovering off it would raycast
+// 83 tubes on every frame of every orbit — the one gesture a phone can least
+// afford. Touch raises the readout on the tap instead (below).
+renderer.domElement.addEventListener('pointermove', ev => {
+  if (ev.pointerType === 'touch') return;
+  showReadout(ev);
 });
 // the controls step clears itself when both gestures have actually been used
 renderer.domElement.addEventListener('pointermove', ev => { if (ev.buttons) navDrag = true; });
 renderer.domElement.addEventListener('wheel', () => { navZoom = true; }, { passive: true });
+// pinch is the touch dolly and fires no wheel event, so the zoom half of that
+// step is read off the camera distance instead of off the gesture
+let navDist = null;
+controls.addEventListener('change', () => {
+  const d = controls.getDistance();
+  if (navDist == null) { navDist = d; return; }
+  if (Math.abs(d - navDist) / navDist > 0.08) { navZoom = true; navDist = d; }
+});
 let downPos = null;
-renderer.domElement.addEventListener('pointerdown', ev => downPos = [ev.clientX, ev.clientY]);
+renderer.domElement.addEventListener('pointerdown', ev => {
+  downPos = [ev.clientX, ev.clientY];
+  if (ev.pointerType === 'touch') hideReadout();
+});
 renderer.domElement.addEventListener('pointerup', ev => {
   if (!downPos) return;
   const moved = Math.hypot(ev.clientX - downPos[0], ev.clientY - downPos[1]);
   downPos = null;
-  if (moved > 5) return;
+  // a finger is wider and shakier than a cursor: 5 px of slop rejects taps a
+  // mouse would have made cleanly
+  if (moved > (ev.pointerType === 'touch' ? 12 : 5)) return;
+  // one tap does both jobs on touch, because there is no second gesture to
+  // give the readout: it pins the cast and reads out where the tap landed
+  if (ev.pointerType === 'touch') showReadout(ev);
   const pk = pickAt(ev);
   if (pk && pk.kind === 'cast') {
     const ci = pk.hit.object.userData.ci;
@@ -3288,7 +3384,7 @@ const AZ0 = Math.atan2(0.95, 1);                   // the scene's default headin
 // adds them, so a panel cannot appear early by accident.
 const REVEAL = {
   descent: ['title', 'exag-badge'],
-  0: ['guide', 'tour', 'row-casts', 'legend', 'rightcol'],   // the profiles and the ramp
+  0: ['guide', 'tour', 'row-casts', 'legend'],   // the profiles and the ramp
   2: ['insets'],                                   // click a tube -> plots
   3: ['timeline'],                                 // drag the playhead
   4: ['row-thermo'],                               // switch the layer on
@@ -3312,13 +3408,18 @@ const FTUE = [
       `surface; <b>warm at the top, cold below</b>. ${casts.length} casts, one month.`
   },
   {
-    text: () => `<b>Drag</b> to turn the volume. <b>Scroll</b> to move closer or further out. ` +
+    text: () => (MOBILE
+      ? `<b>Drag with one finger</b> to turn the volume. <b>Pinch</b> to move closer or further out. `
+      : `<b>Drag</b> to turn the volume. <b>Scroll</b> to move closer or further out. `) +
       `Depth is stretched <kbd>×200</kbd>.`,
     done: () => navDrag && navZoom, linger: 2500
   },
   {
-    text: () => `<b>Click a tube</b> to plot it against all ${casts.length}. Up to three at once. ` +
-      `Hover one to read what it measured at that depth.`,
+    text: () => (MOBILE
+      ? `<b>Tap a tube</b> to plot it against all ${casts.length} and read what it measured where you touched it. ` +
+        `Up to three at once; tap a plotted one again to drop it.`
+      : `<b>Click a tube</b> to plot it against all ${casts.length}. Up to three at once. ` +
+        `Hover one to read what it measured at that depth.`),
     done: () => pins.length > 0, linger: 2500
   },
   {
@@ -3660,8 +3761,8 @@ function introTick(now) {
     const el = Math.min(Math.PI / 2 - 0.005, Math.PI / 2 + (EL1 - Math.PI / 2) * u);
     const r = H / Math.tan(THREE.MathUtils.degToRad(fov / 2));
     applyView({ pres: WORK.pres * u, hor: r * Math.cos(el), hgt: r * Math.sin(el), az: WORK.az * u, fov });
-    scShift.x = INTRO_SHIFT.x + (SC_SHIFT_X - INTRO_SHIFT.x) * u;
-    scShift.y = INTRO_SHIFT.y + (SC_SHIFT_Y - INTRO_SHIFT.y) * u;
+    scShift.x = INTRO_SHIFT.x + (scBase.x - INTRO_SHIFT.x) * u;
+    scShift.y = INTRO_SHIFT.y + (scBase.y - INTRO_SHIFT.y) * u;
     applyViewShift();
     castGroup.scale.y = Math.max(1e-4, interp(tc, [f0 + 0.15 * D, f0 + 0.8 * D], [0, 1], EASE.out));
     // the depth axis is edge-on until the tilt opens it: its labels would pile
@@ -3755,6 +3856,9 @@ onDay(); onDepth(); onSect(); rebuildIso(); buildThermo(); drawLegend(); drawIns
 computeCurves(); drawTimeline(); timeStatus(); syncPlayBtn();
 $('v-lt').textContent = '×' + TIME.scale.toFixed(2);
 syncUncUI();
+// no hover on a touch screen, so the hint must not ask for one
+if (MOBILE) document.querySelector('#insets .hint').textContent =
+  'tap a tube to trace and pin it (up to 3). Grey = all 83 profiles.';
 
 // URL params for scripted screenshots: ?var=psal&step=3&mode=expert&exag=1&view=map
 {
@@ -3783,6 +3887,15 @@ syncUncUI();
       applyView(WORK);
       revealAll();
       ftueShow(fq === 'skip' ? FTUE.length : +fq);
+    } else if (MOBILE) {
+      // the opening is a camera move with constants tuned to a wide viewport,
+      // and it costs a phone several seconds of the worst frames it will draw
+      // before anything responds. Land in the working view and start the
+      // walkthrough, which is the part that carries the argument anyway.
+      introDone = true;
+      applyView(WORK);
+      revealAll();
+      ftueShow(0);
     } else introStart(performance.now());
   } else if (q.has('step')) runTour(+q.get('step')); else runTour(0);
   if (q.has('var')) setVar(q.get('var'));
@@ -3880,13 +3993,124 @@ syncUncUI();
   }
 }
 
-addEventListener('resize', () => {
+// ---------- small screen: the notice and the sheet ----------
+// The panels that have nowhere to sit on a phone's bottom edge are moved into
+// #sheet and slide up over the scene on demand. The nodes are moved, not
+// copied: every listener, every canvas and every id lookup already wired up
+// stays valid, and the move reverses if the viewport grows back past the
+// breakpoint. The showcase keeps its walkthrough card and its toggles in the
+// grid — those are its content, not its controls — so only the plots and the
+// colour key go in.
+const SHEET_PANELS = SHOWCASE
+  ? ['insets', 'legend']
+  : ['tour', 'rail', 'insets', 'legend', 'prov-box'];
+const SHEET_LABEL = SHOWCASE ? 'Plots & key' : 'Controls';
+const sheetHome = new Map();                       // id -> where it came from
+let sheetMoved = false;
+function setSheet(open) {
+  document.body.classList.toggle('sheet-open', open);
+  $('sheet-btn').setAttribute('aria-expanded', String(open));
+  $('sheet-btn').textContent = open ? 'Close' : SHEET_LABEL;
+  if (open) { sizeInsets(); drawInsets(); drawLegend(); }   // sized from a box that was 0 wide while closed
+}
+function syncMobileDom() {
+  if (MOBILE === sheetMoved) return;
+  const sheet = $('sheet');
+  if (MOBILE) {
+    for (const id of SHEET_PANELS) {
+      const el = $(id);
+      sheetHome.set(id, [el.parentNode, el.nextSibling]);
+      sheet.appendChild(el);
+    }
+  } else {
+    for (const id of SHEET_PANELS) {
+      const [parent, next] = sheetHome.get(id);
+      parent.insertBefore($(id), next);
+    }
+    setSheet(false);
+  }
+  sheetMoved = MOBILE;
+  setSheet(document.body.classList.contains('sheet-open') && MOBILE);
+}
+$('sheet-btn').addEventListener('click', () =>
+  setSheet(!document.body.classList.contains('sheet-open')));
+
+// The notice is dismissed for the tab, not for good: a reload after a rotation
+// should not nag again, but a link opened tomorrow should still say it. Its
+// height feeds --note-h, which is the HUD's extra top padding, so it pushes the
+// header down rather than covering it.
+const NOTE_KEY = 'wc-small-screen-note';
+const NOTE_FLOAT_MQ = matchMedia('(max-height: 420px)');
+function syncNote() {
+  let dismissed = false;
+  try { dismissed = sessionStorage.getItem(NOTE_KEY) === '1'; } catch { /* private mode */ }
+  const on = MOBILE && !dismissed && !document.body.classList.contains('figure');
+  document.body.classList.toggle('mn-off', !on);
+  // on a viewport this short there is no height to give it: it stops reserving
+  // a row and overlays the header instead, which it can afford to do because
+  // it is the one thing on the page whose whole job is to be dismissed
+  const reserve = on && !NOTE_FLOAT_MQ.matches;
+  document.body.classList.toggle('mn-float', on && !reserve);
+  document.documentElement.style.setProperty(
+    '--note-h', (reserve ? $('mobilenote').offsetHeight : 0) + 'px');
+}
+$('mn-close').addEventListener('click', () => {
+  try { sessionStorage.setItem(NOTE_KEY, '1'); } catch { /* private mode */ }
+  syncNote();
+});
+
+// A view tuned on a wide screen frames the domain by its *vertical* field, so a
+// portrait phone gets the same height and a third of the width. Pull the camera
+// back by the square root of the shortfall — the whole shortfall would put the
+// column too far off to read — once, at load. After that the framing is the
+// viewer's and a rotation has no business undoing their zoom.
+function frameForViewport() {
+  const k = Math.min(1.9, Math.sqrt((16 / 9) / Math.max(0.2, innerWidth / innerHeight)));
+  if (k <= 1.001) return;
+  camera.position.sub(controls.target).multiplyScalar(k).add(controls.target);
+  controls.update();
+}
+
+// ---------- layout ----------
+// One pass for everything that depends on the viewport: the cameras and the
+// renderer; the method note's fold; every 2D canvas, whose bitmap is its CSS
+// box, so a resize re-allocates and redraws it rather than letting CSS stretch
+// a stale one (the timeline's playhead used to be drawn at one width and
+// dragged at another); and the showcase view shift. Coalesced to one run per
+// frame, and run once here after the URL parameters have set the mode.
+const PROV_OPEN_MQ = matchMedia('(min-width: 1440px) and (min-height: 860px)');
+let provOpenWas = null, layoutQueued = false;
+function relayout() {
+  layoutQueued = false;
+  // "small" is re-read here rather than latched at load, so a desktop window
+  // dragged across the breakpoint, or a phone rotated, lands on the right
+  // layout and the right input model
+  if (MOBILE_FORCE == null) MOBILE = MOBILE_MQ.matches;
+  document.body.classList.toggle('mobile', MOBILE);
+  syncMobileDom();
+  syncNote();
   persp.aspect = innerWidth / innerHeight;
   persp.updateProjectionMatrix();
   if (camera === ortho) { const h = ortho.top; ortho.left = -h * persp.aspect; ortho.right = h * persp.aspect; ortho.updateProjectionMatrix(); }
   renderer.setSize(innerWidth, innerHeight);
+  // the note is open on a big screen and folded on a small one; a manual
+  // toggle stands until the viewport crosses the line again
+  if (PROV_OPEN_MQ.matches !== provOpenWas) { provOpenWas = PROV_OPEN_MQ.matches; $('prov-box').open = provOpenWas; }
+  sizeInsets(); drawInsets(); drawLegend(); drawTimeline();
+  computeViewShift();
+  if (introT0 == null || introDone) { scShift.x = scBase.x; scShift.y = scBase.y; }
   applyViewShift();
+  updateFocus();
+}
+addEventListener('resize', () => {
+  if (layoutQueued) return;
+  layoutQueued = true;
+  requestAnimationFrame(relayout);
 });
+relayout();
+if (MOBILE_AT_LOAD) frameForViewport();
+// ?sheet=1 opens the mobile sheet, so a capture can land on it like any other state
+if (MOBILE && new URLSearchParams(location.search).get('sheet') === '1') setSheet(true);
 
 let lastFrame = 0;
 function frame(now) {
@@ -3942,6 +4166,7 @@ function frame(now) {
   renderer.render(scene, camera);
   updateLabels();
   drawGizmo();
+  placeReadout();
 }
 requestAnimationFrame(frame);
 
@@ -3994,7 +4219,7 @@ if (new URLSearchParams(location.search).has('bench')) {
       if (last) tm.frame.push(now - last); last = now;
       if (++n < 90) { requestAnimationFrame(tickF); return; }
       const inf = renderer.info.render;
-      say(`nav render=${med(tm.render).toFixed(1)} labels=${med(tm.labels).toFixed(2)} gizmo=${med(tm.gizmo).toFixed(2)} frame=${med(tm.frame).toFixed(1)} calls=${inf.calls} tris=${inf.triangles} lines=${inf.lines} px=${renderer.domElement.width}x${renderer.domElement.height} dpr=${renderer.getPixelRatio()}`);
+      say(`nav render=${med(tm.render).toFixed(1)} labels=${med(tm.labels).toFixed(2)} gizmo=${med(tm.gizmo).toFixed(2)} frame=${med(tm.frame).toFixed(1)} calls=${inf.calls} tris=${inf.triangles} lines=${inf.lines} px=${renderer.domElement.width}x${renderer.domElement.height} dpr=${renderer.getPixelRatio()} msaa=${renderer.getContext().getParameter(renderer.getContext().SAMPLES)}`);
       // play: same, with the timeline running
       for (const k in tm) tm[k].length = 0;
       TIME.playing = true; setTime(T.tMin, true); n = 0; last = 0;
@@ -4007,5 +4232,36 @@ if (new URLSearchParams(location.search).has('bench')) {
       requestAnimationFrame(tickP);
     };
     requestAnimationFrame(tickF);
+  }, 1500);
+}
+
+// ?layoutcheck=1: HUD panels that overlap each other or leave the viewport,
+// written to document.title for a headless capture to read off --dump-dom.
+// Throwaway measurement, like ?bench=1.
+if (new URLSearchParams(location.search).has('layoutcheck')) {
+  setTimeout(() => {
+    const ids = ['title', 'gizmo', 'tour', 'guide', 'rail', 'insets', 'timeline', 'legend', 'prov-box', 'exag-badge'];
+    const R = [];
+    for (const id of ids) {
+      const el = $(id);
+      if (!el || getComputedStyle(el).display === 'none') continue;
+      // the mobile sheet is a scroll container that overlays the bottom band on
+      // purpose: what is inside it is neither out of place nor out of bounds
+      if (el.closest('#sheet')) continue;
+      const r = el.getBoundingClientRect();
+      if (r.width && r.height) R.push({ id, r });
+    }
+    const bad = [];
+    for (let i = 0; i < R.length; i++) {
+      const a = R[i].r;
+      if (a.left < -1 || a.top < -1 || a.right > innerWidth + 1 || a.bottom > innerHeight + 1) bad.push(R[i].id + '>viewport');
+      for (let j = i + 1; j < R.length; j++) {
+        const b = R[j].r;
+        const ox = Math.min(a.right, b.right) - Math.max(a.left, b.left);
+        const oy = Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top);
+        if (ox > 4 && oy > 4) bad.push(`${R[i].id}~${R[j].id}`);
+      }
+    }
+    document.title = `LAYOUT|${innerWidth}x${innerHeight}|` + (bad.length ? bad.join(',') : 'ok');
   }, 1500);
 }
