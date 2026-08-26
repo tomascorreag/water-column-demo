@@ -313,23 +313,36 @@ function vsupLayer(sup) {
 }
 // the same tree on an arbitrary ramp and an already-normalised value, for the
 // layer surfaces (whose value is a thickness, not one of the field variables)
+// The tree has 31 leaves per ramp (16+8+4+2+1 bins), so every colour an
+// interpolated layer can take is one of 31 arrays per ramp, built on first
+// use and shared after that. UNC is folded in by vsupLayer before the lookup,
+// so (ramp, layer, bin) is the whole key. The array returned is shared: read
+// it, never write to it. The slice alone asks 40k times per rebuild, and
+// allocating two arrays per ask was most of what it cost.
+const vsupMemo = new Map();                         // lut -> [layer * 16 + bin] -> [r, g, b]
+function vsupLeaf(lut, layer, b) {
+  let tab = vsupMemo.get(lut);
+  if (!tab) { tab = new Array(VSUP_LAYERS * 16).fill(null); vsupMemo.set(lut, tab); }
+  const slot = layer * 16 + b;
+  let rgb = tab[slot];
+  if (!rgb) {
+    const bins = 1 << (VSUP_LAYERS - 1 - layer);
+    const m = layer / (VSUP_LAYERS - 1);              // 0 = full colour, 1 = neutral
+    rgb = tab[slot] = lutColor(lut, (b + 0.5) / bins).map((c, i) => c + (VSUP_NEUTRAL[i] - c) * m);
+  }
+  return rgb;
+}
 function vsupOn(lut, u, sup) {
   const layer = vsupLayer(sup);
   const bins = 1 << (VSUP_LAYERS - 1 - layer);
-  const b = Math.min(bins - 1, Math.floor(clamp01(u) * bins));
-  const rgb = lutColor(lut, (b + 0.5) / bins);
-  const m = layer / (VSUP_LAYERS - 1);
-  return rgb.map((c, i) => c + (VSUP_NEUTRAL[i] - c) * m);
+  return vsupLeaf(lut, layer, Math.min(bins - 1, Math.floor(clamp01(u) * bins)));
 }
 function vsupColor(v, sup, key = curVar) {
   const d = VARS[key];
   const layer = vsupLayer(sup);
   const bins = 1 << (VSUP_LAYERS - 1 - layer);
   const u = clamp01((v - d.lo) / (d.hi - d.lo));
-  const b = Math.min(bins - 1, Math.floor(u * bins));
-  const rgb = lutColor(d.lut, (b + 0.5) / bins);
-  const m = layer / (VSUP_LAYERS - 1);                // 0 = full colour, 1 = neutral
-  return rgb.map((c, i) => c + (VSUP_NEUTRAL[i] - c) * m);
+  return vsupLeaf(d.lut, layer, Math.min(bins - 1, Math.floor(u * bins)));
 }
 // opacity: interpolated geometry fades out entirely as support -> 0. Support
 // exactly 0 means no cast is within the kernel cutoff at all, so nothing is
@@ -822,10 +835,13 @@ const ISO_NEUTRAL = [0.66, 0.69, 0.73];
 // sheet colour: the level's own colour on the same ramp as the field, pulled
 // toward neutral by the same VSUP layer rule as the slices, so "greyer = less
 // support" is one rule everywhere
+// five colours per (variable, level), shared arrays like vsupLeaf's
+const isoColMemo = { key: null, base: null, tab: [] };
 const isoVertexColor = (sup) => {
-  const m = vsupLayer(sup) / (VSUP_LAYERS - 1);
-  const base = varColor(isoLevel(), isoVar());
-  return base.map((c, i) => c + (ISO_NEUTRAL[i] - c) * m);
+  const key = `${isoVar()}|${isoLevel()}`;
+  if (isoColMemo.key !== key) { isoColMemo.key = key; isoColMemo.base = varColor(isoLevel(), isoVar()); isoColMemo.tab.length = 0; }
+  const layer = vsupLayer(sup), m = layer / (VSUP_LAYERS - 1);
+  return isoColMemo.tab[layer] ??= isoColMemo.base.map((c, i) => c + (ISO_NEUTRAL[i] - c) * m);
 };
 const isoLineMat = new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.6 });
 // A fishnet over a heightSurface: same vertices, every `step` row and column,
@@ -837,22 +853,31 @@ const isoLineMat = new THREE.LineBasicMaterial({ vertexColors: true, transparent
 // pale grey barely off the ground colour) still wants a net that reaches full
 // ink where support is full. Gain is 1/peak-alpha, so the blend runs 0..1 over
 // the sheet's actual range instead of over 0..0.34 of it.
+// scratch for fishnet: a node has at most one segment to the right and one
+// down, so 2 * FX * FY segments of two vertices bounds it
+const FNET = { p: new Float32Array(FX * FY * 12), c: new Float32Array(FX * FY * 12) };
 function fishnet(S, step, slopeMax, { gain = 1, ink = 0.11, mat = isoLineMat } = {}) {
   const { pos, alp, vid } = S;
-  const lp = [], lc = [];
-  const lcol = a => { const f = clamp01(alp[a] * gain); return GROUND_RGB.map(g => g + (ink - g) * f); };
-  const ok = (a, b) => a >= 0 && b >= 0 && Math.abs(pos[3 * a + 1] - pos[3 * b + 1]) <=
-    slopeMax * Math.hypot(pos[3 * a] - pos[3 * b], pos[3 * a + 2] - pos[3 * b + 2]);
+  const lp = FNET.p, lc = FNET.c;
+  const [g0, g1, g2] = GROUND_RGB;
+  let n = 0;
+  const put = a => {
+    const f = clamp01(alp[a] * gain), o = 3 * n++;
+    lp[o] = pos[3 * a]; lp[o + 1] = pos[3 * a + 1]; lp[o + 2] = pos[3 * a + 2];
+    lc[o] = g0 + (ink - g0) * f; lc[o + 1] = g1 + (ink - g1) * f; lc[o + 2] = g2 + (ink - g2) * f;
+  };
+  const sm2 = slopeMax * slopeMax;
   const seg = (a, b) => {
-    if (!ok(a, b)) return;
-    lp.push(pos[3 * a], pos[3 * a + 1], pos[3 * a + 2], pos[3 * b], pos[3 * b + 1], pos[3 * b + 2]);
-    lc.push(...lcol(a), ...lcol(b));
+    if (a < 0 || b < 0) return;
+    const dx = pos[3 * a] - pos[3 * b], dy = pos[3 * a + 1] - pos[3 * b + 1], dz = pos[3 * a + 2] - pos[3 * b + 2];
+    if (dy * dy > sm2 * (dx * dx + dz * dz)) return;
+    put(a); put(b);
   };
   for (let fy = 0; fy < FY; fy += step) for (let fx = 0; fx < FX - 1; fx++) seg(vid[fy * FX + fx], vid[fy * FX + fx + 1]);
   for (let fx = 0; fx < FX; fx += step) for (let fy = 0; fy < FY - 1; fy++) seg(vid[fy * FX + fx], vid[(fy + 1) * FX + fx]);
   const g = new THREE.BufferGeometry();
-  g.setAttribute('position', new THREE.Float32BufferAttribute(lp, 3));
-  g.setAttribute('color', new THREE.Float32BufferAttribute(lc, 3));
+  g.setAttribute('position', new THREE.BufferAttribute(lp.slice(0, 3 * n), 3));
+  g.setAttribute('color', new THREE.BufferAttribute(lc.slice(0, 3 * n), 3));
   return new THREE.LineSegments(g, mat);
 }
 const GROUND_RGB = [0.894, 0.906, 0.922];
@@ -864,16 +889,19 @@ const pz = fy => zOf(G.lat0 + (G.lat1 - G.lat0) * fy / (FY - 1));
 // 3x3 median (>=5 valid neighbours) kills single-cell spikes and ragged rims
 function median3x3(src) {
   const out = new Float32Array(FX * FY).fill(NaN);
-  const nb = [];
+  const nb = new Float32Array(9);                    // insertion sort in place: no per-node allocation
   for (let fy = 0; fy < FY; fy++) for (let fx = 0; fx < FX; fx++) {
-    nb.length = 0;
+    let n = 0;
     for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
       const yy = fy + dy, xx = fx + dx;
       if (yy < 0 || yy >= FY || xx < 0 || xx >= FX) continue;
       const v = src[yy * FX + xx];
-      if (!Number.isNaN(v)) nb.push(v);
+      if (Number.isNaN(v)) continue;
+      let k = n++;
+      while (k > 0 && nb[k - 1] > v) { nb[k] = nb[k - 1]; k--; }
+      nb[k] = v;
     }
-    if (nb.length >= 5) { nb.sort((a, b) => a - b); out[fy * FX + fx] = nb[nb.length >> 1]; }
+    if (n >= 5) out[fy * FX + fx] = nb[n >> 1];
   }
   return out;
 }
@@ -908,42 +936,79 @@ function expandFine(c) {
 // nodes onto the contour where the layer ends); opt.soft marks those moved
 // nodes, whose edges skip the slope guard — a rim that tapers to nothing is
 // steep by construction and the guard would delete exactly it.
+// scratch for heightSurface, sized for the whole fine grid; the geometry gets
+// a copy of the used prefix, so two surfaces built in a row (the layer's top
+// and base) do not share a buffer
+const HS = {
+  pos: new Float32Array(FX * FY * 3), col: new Float32Array(FX * FY * 3), alp: new Float32Array(FX * FY),
+  soft: new Uint8Array(FX * FY), idx: new Uint32Array((FX - 1) * (FY - 1) * 6), vid: new Int32Array(FX * FY),
+};
 function heightSurface(depth, sup, colFn, alpFn, slopeMax, opt = {}) {
   const { xs = null, zs = null, soft = null, box = null } = opt;
   const x0 = box ? box.x0 : 0, x1 = box ? box.x1 : FX - 1;
   const y0 = box ? box.y0 : 0, y1 = box ? box.y1 : FY - 1;
-  const pos = [], col = [], alp = [], idx = [];
-  const vid = new Int32Array(FX * FY).fill(-1);
-  const vsoft = [];
+  const { pos, col, alp, idx, vid } = HS, vsoft = HS.soft;
+  vid.fill(-1);
+  let nv = 0, ni = 0;
   for (let fy = y0; fy <= y1; fy++) for (let fx = x0; fx <= x1; fx++) {
     const i = fy * FX + fx;
     const d = depth[i];
     if (Number.isNaN(d)) continue;
-    vid[i] = pos.length / 3;
-    const s = sup[i];
-    pos.push(xs ? xs[i] : px(fx), yOf(d), zs ? zs[i] : pz(fy));
-    col.push(...colFn(s, d, i));                     // d, i: for a sheet coloured by its own depth or by a per-node field
-    alp.push(alpFn(s));
-    vsoft.push(soft ? soft[i] : 0);
+    vid[i] = nv;
+    const s = sup[i], o = 3 * nv;
+    pos[o] = xs ? xs[i] : px(fx); pos[o + 1] = yOf(d); pos[o + 2] = zs ? zs[i] : pz(fy);
+    const rgb = colFn(s, d, i);                      // d, i: for a sheet coloured by its own depth or by a per-node field
+    col[o] = rgb[0]; col[o + 1] = rgb[1]; col[o + 2] = rgb[2];
+    alp[nv] = alpFn(s);
+    vsoft[nv] = soft ? soft[i] : 0;
+    nv++;
   }
+  const sm2 = slopeMax * slopeMax;
   const okTri = (a, b, c) => {
-    const s = (i, j) => vsoft[i] || vsoft[j] || Math.abs(pos[3 * i + 1] - pos[3 * j + 1]) <=
-      slopeMax * Math.hypot(pos[3 * i] - pos[3 * j], pos[3 * i + 2] - pos[3 * j + 2]);
+    const s = (i, j) => {
+      if (vsoft[i] || vsoft[j]) return true;
+      const dx = pos[3 * i] - pos[3 * j], dy = pos[3 * i + 1] - pos[3 * j + 1], dz = pos[3 * i + 2] - pos[3 * j + 2];
+      return dy * dy <= sm2 * (dx * dx + dz * dz);
+    };
     return s(a, b) && s(b, c) && s(a, c);
   };
   for (let fy = y0; fy < y1; fy++) for (let fx = x0; fx < x1; fx++) {
     const a = vid[fy * FX + fx], b = vid[fy * FX + fx + 1],
       c = vid[(fy + 1) * FX + fx], d = vid[(fy + 1) * FX + fx + 1];
-    if (a >= 0 && b >= 0 && c >= 0 && okTri(a, b, c)) idx.push(a, c, b);
-    if (b >= 0 && c >= 0 && d >= 0 && okTri(b, c, d)) idx.push(b, c, d);
+    if (a >= 0 && b >= 0 && c >= 0 && okTri(a, b, c)) { idx[ni++] = a; idx[ni++] = c; idx[ni++] = b; }
+    if (b >= 0 && c >= 0 && d >= 0 && okTri(b, c, d)) { idx[ni++] = b; idx[ni++] = c; idx[ni++] = d; }
   }
+  const P = pos.slice(0, 3 * nv), A = alp.slice(0, nv), I = idx.slice(0, ni);
   const geo = new THREE.BufferGeometry();
-  geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
-  geo.setAttribute('col', new THREE.Float32BufferAttribute(col, 3));
-  geo.setAttribute('alpha', new THREE.Float32BufferAttribute(alp, 1));
-  geo.setIndex(idx);
-  geo.computeVertexNormals();
-  return { geo, pos, alp, vid };
+  geo.setAttribute('position', new THREE.BufferAttribute(P, 3));
+  geo.setAttribute('col', new THREE.BufferAttribute(col.slice(0, 3 * nv), 3));
+  geo.setAttribute('alpha', new THREE.BufferAttribute(A, 1));
+  geo.setAttribute('normal', new THREE.BufferAttribute(vertexNormals(P, I, nv), 3));
+  geo.setIndex(new THREE.BufferAttribute(I, 1));
+  return { geo, pos: P, alp: A, vid: vid.slice() };
+}
+// Area-weighted vertex normals over the flat arrays: the same sum of face
+// normals computeVertexNormals forms, without a Vector3 per corner. Three's
+// version was half of heightSurface's time across the three sheets a tick
+// builds. Face normal (C - B) x (A - B), as three winds it.
+const VN = new Float32Array(FX * FY * 3);
+function vertexNormals(P, I, nv) {
+  const n = VN.subarray(0, 3 * nv);
+  n.fill(0);
+  for (let k = 0; k < I.length; k += 3) {
+    const a = 3 * I[k], b = 3 * I[k + 1], c = 3 * I[k + 2];
+    const cbx = P[c] - P[b], cby = P[c + 1] - P[b + 1], cbz = P[c + 2] - P[b + 2];
+    const abx = P[a] - P[b], aby = P[a + 1] - P[b + 1], abz = P[a + 2] - P[b + 2];
+    const nx = cby * abz - cbz * aby, ny = cbz * abx - cbx * abz, nz = cbx * aby - cby * abx;
+    n[a] += nx; n[a + 1] += ny; n[a + 2] += nz;
+    n[b] += nx; n[b + 1] += ny; n[b + 2] += nz;
+    n[c] += nx; n[c + 1] += ny; n[c + 2] += nz;
+  }
+  for (let v = 0; v < 3 * nv; v += 3) {
+    const l = Math.hypot(n[v], n[v + 1], n[v + 2]) || 1;
+    n[v] /= l; n[v + 1] /= l; n[v + 2] /= l;
+  }
+  return n.slice();
 }
 
 // measured crossings: a short collar on each tube where the binned profile
@@ -951,28 +1016,51 @@ function heightSurface(depth, sup, colFn, alpFn, slopeMax, opt = {}) {
 // between them is interpolation.
 const isoRingGroup = new THREE.Group();
 world.add(isoRingGroup);
+// one geometry holding a copy of `proto` at every (x, y, z) in `places`: the
+// collars and the iso rings are 83-162 identical open cylinders each, and as
+// separate meshes they were 83-162 draw calls for a few hundred triangles.
+// Nothing picks them (pickAt reads the tubes and the planes), so nothing
+// needs them apart. Position only: their materials are unlit.
+function mergedCylinders(proto, places) {
+  const pp = proto.getAttribute('position').array, pi = proto.getIndex().array;
+  const nv = pp.length / 3, n = places.length / 3;
+  const pos = new Float32Array(pp.length * n), idx = new Uint32Array(pi.length * n);
+  for (let m = 0; m < n; m++) {
+    const x = places[3 * m], y = places[3 * m + 1], z = places[3 * m + 2], vo = m * nv;
+    for (let v = 0; v < nv; v++) {
+      pos[(vo + v) * 3] = pp[3 * v] + x; pos[(vo + v) * 3 + 1] = pp[3 * v + 1] + y; pos[(vo + v) * 3 + 2] = pp[3 * v + 2] + z;
+    }
+    for (let k = 0; k < pi.length; k++) idx[m * pi.length + k] = pi[k] + vo;
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  g.setIndex(new THREE.BufferAttribute(idx, 1));
+  return g;
+}
 function buildIsoRings() {
   for (const ch of [...isoRingGroup.children]) { ch.geometry.dispose(); isoRingGroup.remove(ch); }
   if (!ISO.on) return;
   const key = isoVar(), level = isoLevel();
   const mat = new THREE.MeshBasicMaterial({ color: new THREE.Color(...varColor(level, key)) });
   const geo = new THREE.CylinderGeometry(TUBE_R * 2.2, TUBE_R * 2.2, 0.03, 14, 1, true);
-  casts.forEach((c, ci) => {
+  // castVisible is constant (castExists is () => true); if it ever becomes a
+  // filter, syncIsoRings has to rebuild here rather than toggle
+  const places = [];
+  casts.forEach((c) => {
+    if (!castVisible(c)) return;
     for (let i = 1; i < c.pres.length; i++) {
       if ((c[key][i - 1] - level) * (c[key][i] - level) > 0) continue;
       const f = (level - c[key][i - 1]) / (c[key][i] - c[key][i - 1] || 1);
-      const m = new THREE.Mesh(geo, mat);
-      m.position.set(xOf(c.lon), yOf(c.pres[i - 1] + f * (c.pres[i] - c.pres[i - 1])), zOf(c.lat));
-      m.userData.ci = ci;
-      isoRingGroup.add(m);
+      places.push(xOf(c.lon), yOf(c.pres[i - 1] + f * (c.pres[i] - c.pres[i - 1])), zOf(c.lat));
       break;
     }
   });
+  if (places.length) isoRingGroup.add(new THREE.Mesh(mergedCylinders(geo, places), mat));
+  geo.dispose();
   syncIsoRings();
 }
 function syncIsoRings() {
-  for (const m of isoRingGroup.children)
-    m.visible = ISO.on && castVisible(casts[m.userData.ci]) && $('tg-casts').checked;
+  isoRingGroup.visible = ISO.on && $('tg-casts').checked;
 }
 function buildIsoSheets() {
   for (const ch of [...isoGroup.children]) { ch.geometry.dispose(); isoGroup.remove(ch); }
@@ -1337,7 +1425,7 @@ function layerCasts() {                              // re-extract only when the
 // the map: top, bot and skill on a gn x gn grid over the box. All three are
 // smooth, so the mesh samples this bilinearly — a depth survives interpolation,
 // which is exactly what a threshold does not.
-const MAP = { top: null, bot: null, skTop: null, skBot: null, n: 0, ok: false };
+const MAP = { top: null, bot: null, skTop: null, skBot: null, n: 0, ok: false, skKey: null, skT: 0 };
 // The covariance between casts depends on their own separations in space and
 // time, never on where the playhead is — only the vector c(x) does. So the
 // factorisation, the weights and the Cholesky factor are cached and the
@@ -1383,7 +1471,7 @@ function oiSystem(idx, X, Z, N, key, cov, sel) {
   // which is the over-confident render the slider exists to contrast against,
   // and which is also what keeps the volume closed over the whole disc at 0.
   const cal = 1 + (cov.cal - 1) * UNC;
-  return { rho, mu, w, Mf, nug, cal };
+  return { rho, mu, w, Mf, nug, cal, L, Lt };
 }
 function oiSetup() {
   const key = `${THERMO.frac}|${THERMO.kind}|${TIME.on}|${TIME.scale}|${UNC}`;
@@ -1396,7 +1484,26 @@ function oiSetup() {
   const X = idx.map(i => xOf(casts[i].lon)), Z = idx.map(i => zOf(casts[i].lat));
   const top = oiSystem(idx, X, Z, N, 'top', layerCov.top, sel);
   const bot = oiSystem(idx, X, Z, N, 'bot', layerCov.bot, sel);
-  OI = (top && bot) ? { idx, N, X, Z, top, bot, sel } : null;
+  if (!top || !bot) { OI = null; return null; }
+  // The covariance between a grid node and a cast separates: c_j(node, t) =
+  // Cs_j(node) * f_j(t), the spatial part times the temporal factor. Cs is
+  // the same at every playhead position, so it is formed here, once per
+  // system, and a tick pays N exps for the f's instead of gn * gn * N. Nodes
+  // more than two cells outside the domain disc are never sampled by the mesh
+  // (bilinear reads the cell a point is in, and every point is inside the
+  // disc), so they are marked and skipped.
+  const gn = LAY.gn, cell = 2 * RC / (gn - 1);
+  const rOK = new Uint8Array(gn * gn);
+  for (const sy of [top, bot]) {
+    sy.Cs = new Float32Array(gn * gn * N);
+    for (let b = 0; b < gn; b++) for (let a = 0; a < gn; a++) {
+      const pxx = (a / (gn - 1) * 2 - 1) * RC, pz = (b / (gn - 1) * 2 - 1) * RC, o = b * gn + a;
+      rOK[o] = Math.hypot(pxx, pz) <= RC + 2 * cell ? 1 : 0;
+      for (let j = 0; j < N; j++)
+        sy.Cs[o * N + j] = (1 - sy.nug) * Math.exp(-((pxx - X[j]) ** 2 + (pz - Z[j]) ** 2) / (2 * sy.L * sy.L));
+    }
+  }
+  OI = { idx, N, X, Z, top, bot, sel, rOK };
   return OI;
 }
 function solveLayer() {
@@ -1406,31 +1513,44 @@ function solveLayer() {
   const { idx, N, X, Z } = oi;
   const gn = LAY.gn;
   MAP.n = gn;
-  MAP.top = new Float32Array(gn * gn); MAP.bot = new Float32Array(gn * gn);
-  MAP.skTop = new Float32Array(gn * gn); MAP.skBot = new Float32Array(gn * gn);
-  const c = new Float64Array(N), u = new Float64Array(N);
+  if (!MAP.top || MAP.top.length !== gn * gn) {
+    MAP.top = new Float32Array(gn * gn); MAP.bot = new Float32Array(gn * gn);
+    MAP.skTop = new Float32Array(gn * gn); MAP.skBot = new Float32Array(gn * gn);
+  }
+  // The estimate costs N per node; the error variance costs N^2/2 (the
+  // forward substitution) and is what a tick spends its time on. Its only
+  // dependence on the playhead is through the temporal factors, whose scale
+  // is L_t(800) = the record length, so over 0.5 d of playhead they move by
+  // under 1 %: the variance is re-solved every 0.5 d (or when the system
+  // changes), the estimate every call.
+  const doSk = MAP.skKey !== OIkey || !TIME.on || Math.abs(TIME.t - MAP.skT) >= 0.5;
+  if (doSk) { MAP.skKey = OIkey; MAP.skT = TIME.t; }
+  const c = new Float64Array(N), u = new Float64Array(N), f = new Float64Array(N);
   const surf = [[oi.top, MAP.top, MAP.skTop], [oi.bot, MAP.bot, MAP.skBot]];
   for (const [sy, val, sk] of surf) {
-    for (let b = 0; b < gn; b++) {
-      const pz = (b / (gn - 1) * 2 - 1) * RC;
-      for (let a = 0; a < gn; a++) {
-        const pxx = (a / (gn - 1) * 2 - 1) * RC, o = b * gn + a;
-        let v = sy.mu;
-        for (let j = 0; j < N; j++) {
-          c[j] = sy.rho(pxx - X[j], pz - Z[j], TIME.t - casts[idx[j]].t);
-          v += sy.w[j] * c[j];
-        }
-        let s2 = 0;                                  // |L^-1 c|^2
-        for (let i = 0; i < N; i++) {
-          let t = c[i];
-          const row = i * N;
-          for (let k = 0; k < i; k++) t -= sy.Mf[row + k] * u[k];
-          t /= sy.Mf[row + i];
-          u[i] = t; s2 += t * t;
-        }
-        val[o] = clamp01(v / G.presMax) * G.presMax;
-        sk[o] = clamp01(1 - sy.cal * (1 - Math.min(1, s2)));
+    // the temporal factor per cast at this playhead (1 with the timeline off);
+    // the spatial part per node is in sy.Cs, see oiSetup
+    for (let j = 0; j < N; j++) f[j] = TIME.on ? timeWeight(TIME.t - casts[idx[j]].t, sy.Lt) : 1;
+    const Cs = sy.Cs, Mf = sy.Mf, w = sy.w;
+    for (let o = 0; o < gn * gn; o++) {
+      if (!oi.rOK[o]) { val[o] = clamp01(sy.mu / G.presMax) * G.presMax; sk[o] = 0; continue; }
+      let v = sy.mu;
+      const co = o * N;
+      for (let j = 0; j < N; j++) {
+        c[j] = Cs[co + j] * f[j];
+        v += w[j] * c[j];
       }
+      val[o] = clamp01(v / G.presMax) * G.presMax;
+      if (!doSk) continue;
+      let s2 = 0;                                    // |L^-1 c|^2
+      for (let i = 0; i < N; i++) {
+        let t = c[i];
+        const row = i * N;
+        for (let k = 0; k < i; k++) t -= Mf[row + k] * u[k];
+        t /= Mf[row + i];
+        u[i] = t; s2 += t * t;
+      }
+      sk[o] = clamp01(1 - sy.cal * (1 - Math.min(1, s2)));
     }
   }
   // a layer cannot be inverted by the map
@@ -1800,15 +1920,14 @@ function buildThermo() {
   const sel = layerCasts();
   const collar = new THREE.CylinderGeometry(TUBE_R * 1.9, TUBE_R * 1.9, 0.004, 12, 1, true);
   const cmat = new THREE.MeshBasicMaterial({ color: new THREE.Color(...THERMO_RGB) });
+  const places = [];
   casts.forEach((c, ci) => {
     const r = sel[ci];
     if (!r || !$('tg-casts').checked || !castVisible(c)) return;
-    for (const p of [r.top, r.bot]) {
-      const m = new THREE.Mesh(collar, cmat);
-      m.position.set(xOf(c.lon), yOf(p), zOf(c.lat));
-      thermoGroup.add(m);
-    }
+    places.push(xOf(c.lon), yOf(r.top), zOf(c.lat), xOf(c.lon), yOf(r.bot), zOf(c.lat));
   });
+  if (places.length) thermoGroup.add(new THREE.Mesh(mergedCylinders(collar, places), cmat));
+  collar.dispose();
   let best = null;
   for (let i = 0; i < FN; i++) {
     if (LF.inc[i] !== 1) continue;
@@ -1870,6 +1989,27 @@ function trilin(arr, gx, gy, kf) {
   };
   return bl(k0) * (1 - wk) + bl(k0 + 1) * wk;
 }
+// one variable and its support at (lon, lat, pres), into a shared object.
+// The slice and the section sample 40k and 24k points per rebuild; fieldAt's
+// four trilinears and a fresh object per sample were most of what they cost.
+const SMP = { v: 0, conf: 0 };
+function fieldSample(lon, lat, pres) {
+  const gx = (lon - G.lon0) / (G.lon1 - G.lon0) * (NX - 1);
+  const gy = (lat - G.lat0) / (G.lat1 - G.lat0) * (NY - 1);
+  const kf = clamp01(pres / G.presMax) * (NZ - 1);
+  const inBox = gx >= 0 && gx <= NX - 1 && gy >= 0 && gy <= NY - 1;
+  const cx = Math.min(Math.max(gx, 0), NX - 1), cy = Math.min(Math.max(gy, 0), NY - 1);
+  const x0 = Math.min(Math.max(Math.floor(cx), 0), NX - 2), wx = clamp01(cx - x0);
+  const y0 = Math.min(Math.max(Math.floor(cy), 0), NY - 2), wy = clamp01(cy - y0);
+  const k0 = Math.min(Math.max(Math.floor(kf), 0), NZ - 2), wk = clamp01(kf - k0);
+  const b0 = k0 * NY * NX + y0 * NX + x0, b1 = b0 + NY * NX;
+  const w00 = (1 - wx) * (1 - wy), w10 = wx * (1 - wy), w01 = (1 - wx) * wy, w11 = wx * wy;
+  const bl = (arr, o) => arr[o] * w00 + arr[o + 1] * w10 + arr[o + NX] * w01 + arr[o + NX + 1] * w11;
+  const conf = inBox ? bl(F.conf, b0) * (1 - wk) + bl(F.conf, b1) * wk : 0;
+  SMP.conf = conf;
+  SMP.v = curVar === 'conf' ? conf : bl(F[curVar], b0) * (1 - wk) + bl(F[curVar], b1) * wk;
+  return SMP;
+}
 // sample the field at (lon, lat, pres); null outside the gridded box
 function fieldAt(lon, lat, pres) {
   const gx = (lon - G.lon0) / (G.lon1 - G.lon0) * (NX - 1);
@@ -1884,25 +2024,34 @@ function fieldAt(lon, lat, pres) {
 }
 
 // marching squares on a W x H scalar array (NaN = undefined) -> canvas lines
+// marching-squares case table: edge pairs per corner code (edges 0 top, 1
+// right, 2 bottom, 3 left), flat so the inner loop allocates nothing
+const MS_SEGS = [null, [3, 0], [0, 1], [3, 1], [1, 2], [3, 0, 1, 2], [0, 2], [3, 2],
+  [2, 3], [0, 2], [0, 1, 2, 3], [1, 2], [1, 3], [0, 1], [3, 0], null];
+// One pass over the cells. The levels are sorted, so a cell only has to look
+// at the ones between its lowest and highest corner (found by bisection); a
+// pass per level over every cell was 20+ passes over the slice for a handful
+// of crossings each.
 function drawContours(ctx, vals, W, H, sx, sy, levels, style) {
   ctx.strokeStyle = style; ctx.lineWidth = 1;
   ctx.beginPath();
-  for (const lv of levels) {
-    for (let j = 0; j < H - 1; j++) for (let i = 0; i < W - 1; i++) {
-      const a = vals[j * W + i], b = vals[j * W + i + 1], c = vals[(j + 1) * W + i + 1], d = vals[(j + 1) * W + i];
-      if (Number.isNaN(a + b + c + d)) continue;
+  const nL = levels.length;
+  if (!nL) { ctx.stroke(); return; }
+  let a, b, c, d, i, j, lv;
+  const ex = e => (e === 0 ? (i + (lv - a) / (b - a)) * sx : e === 1 ? (i + 1) * sx : e === 2 ? (i + (lv - d) / (c - d)) * sx : i * sx);
+  const ey = e => (e === 0 ? j * sy : e === 1 ? (j + (lv - b) / (c - b)) * sy : e === 2 ? (j + 1) * sy : (j + (lv - a) / (d - a)) * sy);
+  const firstAbove = v => { let lo = 0, hi = nL; while (lo < hi) { const m = (lo + hi) >> 1; if (levels[m] <= v) lo = m + 1; else hi = m; } return lo; };
+  for (j = 0; j < H - 1; j++) for (i = 0; i < W - 1; i++) {
+    a = vals[j * W + i]; b = vals[j * W + i + 1]; c = vals[(j + 1) * W + i + 1]; d = vals[(j + 1) * W + i];
+    if (Number.isNaN(a + b + c + d)) continue;
+    const mn = Math.min(a, b, c, d), mx = Math.max(a, b, c, d);
+    // a level crosses the cell iff mn < lv <= mx (the corner test is >=)
+    for (let l = firstAbove(mn); l < nL && levels[l] <= mx; l++) {
+      lv = levels[l];
       const code = (a >= lv) | ((b >= lv) << 1) | ((c >= lv) << 2) | ((d >= lv) << 3);
-      if (code === 0 || code === 15) continue;
-      const t = (p, q) => (lv - p) / (q - p);
-      const E = { // edge midpoints in canvas px: 0 top, 1 right, 2 bottom, 3 left
-        0: [(i + t(a, b)) * sx, j * sy], 1: [(i + 1) * sx, (j + t(b, c)) * sy],
-        2: [(i + t(d, c)) * sx, (j + 1) * sy], 3: [i * sx, (j + t(a, d)) * sy]
-      };
-      const segs = {
-        1: [[3, 0]], 2: [[0, 1]], 3: [[3, 1]], 4: [[1, 2]], 5: [[3, 0], [1, 2]], 6: [[0, 2]], 7: [[3, 2]],
-        8: [[2, 3]], 9: [[0, 2]], 10: [[0, 1], [2, 3]], 11: [[1, 2]], 12: [[1, 3]], 13: [[0, 1]], 14: [[3, 0]]
-      }[code];
-      for (const [e0, e1] of segs) { ctx.moveTo(...E[e0]); ctx.lineTo(...E[e1]); }
+      const segs = MS_SEGS[code];
+      if (!segs) continue;
+      for (let k = 0; k < segs.length; k += 2) { ctx.moveTo(ex(segs[k]), ey(segs[k])); ctx.lineTo(ex(segs[k + 1]), ey(segs[k + 1])); }
     }
   }
   ctx.stroke();
@@ -1913,26 +2062,47 @@ function contourLevels() {
   return out;
 }
 // paint one field image: small (W x H) samples -> big canvas with holes and contours
+// the support ramp, quantised to 256 steps and kept: the continuous varColor
+// allocates per call, and the slice asks for it per pixel
+const confTab = [];
+const confColor = c => {
+  const q = Math.round(clamp01((c - VARS.conf.lo) / (VARS.conf.hi - VARS.conf.lo)) * 255);
+  return confTab[q] ??= varColor(VARS.conf.lo + (VARS.conf.hi - VARS.conf.lo) * q / 255, 'conf');
+};
+// per-target scratch: the two small canvases, their ImageData and the sample
+// arrays are made once per (canvas, W, H) and refilled, not rebuilt per tick
+const PF = new Map();
 function paintField(big, W, H, sample) {
-  const vals = new Float32Array(W * H).fill(NaN), sup = new Float32Array(W * H), insideAny = new Uint8Array(W * H);
-  const small = document.createElement('canvas');
-  small.width = W; small.height = H;
-  const sctx = small.getContext('2d');
-  const img = sctx.createImageData(W, H);
+  let S = PF.get(big);
+  if (!S || S.W !== W || S.H !== H) {
+    const small = document.createElement('canvas'), mask = document.createElement('canvas');
+    small.width = mask.width = W; small.height = mask.height = H;
+    const sctx = small.getContext('2d'), mctx = mask.getContext('2d');
+    S = { W, H, small, sctx, img: sctx.createImageData(W, H), mask, mctx, mimg: mctx.createImageData(W, H),
+      vals: new Float32Array(W * H), sup: new Float32Array(W * H), insideAny: new Uint8Array(W * H) };
+    PF.set(big, S);
+  }
+  const { vals, sup, insideAny, img, mimg, sctx } = S;
+  vals.fill(NaN); sup.fill(0); insideAny.fill(0);
+  const data = img.data, mdata = mimg.data, isConf = curVar === 'conf';
   for (let j = 0; j < H; j++) for (let i = 0; i < W; i++) {
     const s = sample(i, j);
     const o = (j * W + i) * 4;
-    if (!s || s.conf < CUT) { img.data[o + 3] = 0; continue; }
-    vals[j * W + i] = s.conf > 0.01 ? s[curVar] : NaN; sup[j * W + i] = s.conf; insideAny[j * W + i] = 1;
-    const rgb = curVar === 'conf' ? varColor(s.conf) : vsupColor(s[curVar], s.conf);
-    img.data[o] = rgb[0] * 255; img.data[o + 1] = rgb[1] * 255; img.data[o + 2] = rgb[2] * 255;
-    img.data[o + 3] = 255;
+    // fade: the whole layer (fill, contours, marks) is multiplied by
+    // supportAlpha through the mask below; unsampled pixels are cleared
+    if (!s || s.conf < CUT) { data[o + 3] = 0; mdata[o + 3] = 0; continue; }
+    const p = j * W + i;
+    vals[p] = s.conf > 0.01 ? s.v : NaN; sup[p] = s.conf; insideAny[p] = 1;
+    const rgb = isConf ? confColor(s.conf) : vsupColor(s.v, s.conf);
+    data[o] = rgb[0] * 255; data[o + 1] = rgb[1] * 255; data[o + 2] = rgb[2] * 255;
+    data[o + 3] = 255;
+    mdata[o + 3] = supportAlpha(s.conf) * 255;
   }
   sctx.putImageData(img, 0, 0);
   const ctx = big.getContext('2d');
   ctx.clearRect(0, 0, big.width, big.height);
   ctx.imageSmoothingEnabled = true;
-  ctx.drawImage(small, 0, 0, big.width, big.height);
+  ctx.drawImage(S.small, 0, 0, big.width, big.height);
   const sx = big.width / (W - 1), sy = big.height / (H - 1);
   if (contoursOn)
     drawContours(ctx, vals, W, H, sx, sy, contourLevels(), 'rgba(0,0,0,0.55)');
@@ -1950,16 +2120,10 @@ function paintField(big, W, H, sample) {
     }
     ctx.globalCompositeOperation = 'source-over';
   }
-  // fade: multiply the whole layer (fill, contours, marks) by supportAlpha
-  const mask = document.createElement('canvas');
-  mask.width = W; mask.height = H;
-  const mctx = mask.getContext('2d');
-  const mimg = mctx.createImageData(W, H);
-  for (let i = 0; i < W * H; i++) mimg.data[i * 4 + 3] = Number.isNaN(vals[i]) && sup[i] === 0 && !insideAny[i] ? 0 : supportAlpha(sup[i]) * 255;
-  mctx.putImageData(mimg, 0, 0);
+  S.mctx.putImageData(mimg, 0, 0);
   ctx.globalCompositeOperation = 'destination-in';
   ctx.imageSmoothingEnabled = true;
-  ctx.drawImage(mask, 0, 0, big.width, big.height);
+  ctx.drawImage(S.mask, 0, 0, big.width, big.height);
   ctx.globalCompositeOperation = 'source-over';
   return ctx;
 }
@@ -1979,12 +2143,13 @@ const slice = (() => {
 })();
 function updateSlice(pres) {
   slice.pres = pres;
+  slice.dirty = false;
   const N = 200;
   const ctx = paintField(slice.canvas, N, N, (i, j) => {
     // CircleGeometry UV: +v = +y before rotation = north (-z)
     const x = (i / (N - 1) * 2 - 1) * RC, z = -((1 - j / (N - 1)) * 2 - 1) * RC;
     if (Math.hypot(x, z) > RC) return null;
-    return fieldAt(lonOfX(x), latOfZ(z), pres);
+    return fieldSample(lonOfX(x), latOfZ(z), pres);
   });
   // cast positions that reach this depth: black-outlined dots = the measurements
   const S = slice.canvas.width;
@@ -2014,6 +2179,7 @@ const sect = (() => {
 })();
 function updateSection(axis, val) {
   sect.axis = axis; sect.val = val;
+  sect.dirty = false;
   const W = 240, H = 100;
   const along = axis === 'lon';                    // N-S plane at fixed longitude
   const c0 = along ? xOf(val) : zOf(val);          // fixed coordinate
@@ -2022,7 +2188,7 @@ function updateSection(axis, val) {
     const u = (i / (W - 1) * 2 - 1) * RC;
     const x = along ? c0 : u, z = along ? -u : c0;
     if (Math.hypot(x, z) > RC) return null;
-    return fieldAt(lonOfX(x), latOfZ(z), j / (H - 1) * G.presMax);
+    return fieldSample(lonOfX(x), latOfZ(z), j / (H - 1) * G.presMax);
   });
   // casts within 40 km of the plane: dashed verticals = where the section is
   // actually constrained by measurements
@@ -2408,8 +2574,14 @@ for (const b of $('sect-axis').querySelectorAll('button'))
     onSect();
   });
 
-$('tg-slice').addEventListener('change', () => { slice.mesh.visible = $('tg-slice').checked; slice.label.visible = slice.mesh.visible; });
-$('tg-sect').addEventListener('change', () => { sect.mesh.visible = $('tg-sect').checked; sect.label.visible = sect.mesh.visible; });
+$('tg-slice').addEventListener('change', () => {
+  slice.mesh.visible = $('tg-slice').checked; slice.label.visible = slice.mesh.visible;
+  if (slice.mesh.visible && slice.dirty) updateSlice(slice.pres);
+});
+$('tg-sect').addEventListener('change', () => {
+  sect.mesh.visible = $('tg-sect').checked; sect.label.visible = sect.mesh.visible;
+  if (sect.mesh.visible && sect.dirty) onSect();
+});
 // iso-surface: the slider range follows whichever variable is being coloured
 const isoRange = () => [VARS[isoVar()].lo, VARS[isoVar()].hi];
 function syncIsoUI() {
@@ -2477,7 +2649,11 @@ function setVar(key) {
   rebuildIso();                                      // the surface follows the variable
 }
 for (const b of $('var-seg').querySelectorAll('button')) b.addEventListener('click', () => setVar(b.dataset.var));
-function refreshField() { updateSlice(slice.pres); onSect(); }
+// a hidden plane is not repainted: it is marked and painted when switched on
+function refreshField() {
+  if (slice.mesh.visible) updateSlice(slice.pres); else slice.dirty = true;
+  if (sect.mesh.visible) onSect(); else sect.dirty = true;
+}
 
 function setMode(m) {
   document.body.classList.toggle('explain', m === 'explain');
@@ -2540,7 +2716,7 @@ const tlT = (px, W) => T.tMin + (px - TL_PADL) / (W - TL_PADL - TL_PADR) * (T.tM
 function drawTimeline() {
   const cv = tl.cv, dpr = Math.min(devicePixelRatio || 1, 2);
   const W = Math.max(360, cv.clientWidth || cv.parentElement.clientWidth - 24);
-  cv.width = W * dpr; cv.height = TL_H * dpr;
+  if (cv.width !== W * dpr || cv.height !== TL_H * dpr) { cv.width = W * dpr; cv.height = TL_H * dpr; }
   cv.style.height = TL_H + 'px';
   const ctx = cv.getContext('2d');
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -2654,13 +2830,27 @@ function timeStatus() {
     (UNC < 1 ? ` Uncertainty weight ${UNC.toFixed(2)}: the field still moves with the playhead, but the render draws its support as 1 &minus; ${UNC.toFixed(2)}(1 &minus; s).` : '');
 }
 
+let thermoAtT = NaN;                                // playhead the layer was last built at
 function applyTime(quick = false) {
   const t0 = performance.now();
   rebuildTimeField();
   onDay(quick);                                      // the 2D insets redraw 83
   recolorCasts();                                    // profiles; too slow per frame
   refreshField();
-  buildIsoSheets(); buildThermo();                   // one surface, so it can keep up
+  buildIsoSheets();                                  // one surface, so it can keep up
+  // The layer's temporal covariance runs on L_t(800) = the record length, so
+  // a frame of playhead (0.04 d at 3 d/s) moves its weights by under 0.1 %.
+  // While the playhead runs it is rebuilt every 0.25 d and on every full
+  // tick; a rebuild is a third of a tick's cost, and this one draws nothing
+  // a frame later could not.
+  // While the playhead runs, the full ticks (quick = false, ~6 Hz) are the
+  // frames the insets redraw on, and the layer stays off them unless it has
+  // fallen 0.5 d behind: the two heaviest rebuilds on one frame is the stutter.
+  const lag = Math.abs(TIME.t - thermoAtT);
+  const due = TIME.playing
+    ? (quick ? !(lag < 0.25) : !(lag < 0.5))
+    : true;
+  if (due) { thermoAtT = TIME.t; buildThermo(); }
   drawTimeline();
   timeStatus();
   $('tl-ms').textContent = `field ${fieldMs.toFixed(0)} / all ${(performance.now() - t0).toFixed(0)} ms`;
@@ -2682,6 +2872,7 @@ $('btn-play').addEventListener('click', () => {
   if (!TIME.on) setTimeOn(true);
   TIME.playing = !TIME.playing;
   if (TIME.playing && TIME.t >= T.tMax - 1e-6) setTime(T.tMin, true);
+  else if (!TIME.playing) applyTime();               // a paused frame is a full tick: nothing left stale
   syncPlayBtn();
 });
 $('sl-lt').addEventListener('input', () => {
@@ -3101,7 +3292,7 @@ const REVEAL = {
   2: ['insets'],                                   // click a tube -> plots
   3: ['timeline'],                                 // drag the playhead
   4: ['row-thermo'],                               // switch the layer on
-  6: ['row-bathy'],                                // the coda, once the run is done
+  end: ['row-bathy'],                              // the closing card
 };
 function reveal(key) {
   for (const id of REVEAL[key] || []) $(id).classList.add('in');
@@ -3140,14 +3331,10 @@ const FTUE = [
     text: () => `<b>Switch on Main thermocline.</b> Most of the temperature drop happens inside that one layer.`,
     done: () => $('tg-thermo').checked
   },
-  {
-    text: () => `<b>Press play.</b> Watch the layer move through the month.`,
-    done: () => TIME.playing
-  },
 ];
 // what the ring should be pointing at on each step; a cast is projected from
 // the scene, everything else is a control that can be found in the DOM
-const FOCUS = { 2: { ci: () => focusCast }, 3: { playhead: true }, 4: { sel: '#row-thermo' }, 5: { sel: '#btn-play' } };
+const FOCUS = { 2: { ci: () => focusCast }, 3: { playhead: true }, 4: { sel: '#row-thermo' } };
 // the playhead's extent on the timeline canvas, in CSS px from its top: the
 // triangle's apex to the foot of the line (drawTimeline's yTick0 - 8 .. yC1 + 3)
 const PH_Y0 = -4, PH_Y1 = 77;
@@ -3205,9 +3392,15 @@ function ftueShow(i, manual = false) {
   $('g-num').textContent = String(Math.min(i + 1, FTUE.length)).padStart(2, '0');
   $('ftue-back').style.visibility = i > 0 ? 'visible' : 'hidden';
   if (i >= FTUE.length) {
-    // the walk is over: the last toggle appears and the guide leaves
-    reveal(6);
-    $('guide').classList.remove('in');
+    // the closing card: what is left to do, with no step attached to it
+    reveal('end');
+    $('g-num').textContent = 'END';
+    $('ftue-dots').innerHTML = FTUE.map(() => '<i class="past"></i>').join('');
+    $('ftue-text').innerHTML = 'That is the walkthrough. <b>Press play</b> to run the month, ' +
+      'switch on <b>Sea floor</b> to see how deep the water under these profiles goes, and keep turning it.';
+    $('ftue-back').style.visibility = 'hidden';
+    $('ftue-skip').style.display = 'none';
+    $('ftue-next').textContent = 'done';
     return;
   }
   if (i === 3) ftueT0 = TIME.t;
@@ -3515,13 +3708,16 @@ if (SHOWCASE) {
   $('sc-bathy').addEventListener('change', () => {
     setBathy($('sc-bathy').checked);
   });
-  $('ftue-next').addEventListener('click', () => ftueShow(ftueStep + 1));
+  $('ftue-next').addEventListener('click', () => {
+    if (ftueStep >= FTUE.length) { $('guide').classList.remove('in'); return; }
+    ftueShow(ftueStep + 1);
+  });
   $('ftue-back').addEventListener('click', () => ftueShow(Math.max(0, ftueStep - 1), true));
   // skip means no more guide: every panel comes out and the card goes, rather
   // than landing on the coda as if the walk had been taken
   $('ftue-skip').addEventListener('click', () => {
-    ftueShow(FTUE.length);
     revealAll();
+    $('guide').classList.remove('in');
   });
   $('ic-skip').addEventListener('click', introSkip);
   $('ic-go').addEventListener('click', introClick);
@@ -3703,7 +3899,7 @@ function frame(now) {
     const t = TIME.t + dts * TIME.speed;
     const quick = (now - (frame.insAt || 0)) < 160;
     if (!quick) frame.insAt = now;
-    if (t >= T.tMax) { setTime(T.tMax); TIME.playing = false; syncPlayBtn(); }
+    if (t >= T.tMax) { TIME.playing = false; setTime(T.tMax); syncPlayBtn(); }   // stopped first: the last tick is a full one
     else setTime(t, quick);
   }
   if (tween) {
@@ -3748,3 +3944,68 @@ function frame(now) {
   drawGizmo();
 }
 requestAnimationFrame(frame);
+
+// ?bench=1: per-stage timings of a timeline tick and of a frame, written to
+// document.title so a headless capture can read them off --dump-dom. Throwaway
+// measurement, not a feature.
+if (new URLSearchParams(location.search).has('bench')) {
+  const out = [];
+  const say = s => { out.push(s); console.log('BENCH ' + s); document.title = 'BENCH|' + out.join('|'); };
+  const med = a => { const s = [...a].sort((x, y) => x - y); return s[s.length >> 1]; };
+  setTimeout(() => {
+    setLayers({ 'tg-casts': true, 'tg-slice': true, 'tg-sect': true, 'tg-iso': true, 'tg-thermo': true });
+    if (!TIME.on) setTimeOn(true);
+    const tOf = i => T.tMin + (T.tMax - T.tMin) * ((0.13 + i * 0.37) % 1);
+    const stages = [
+      ['field', () => rebuildTimeField()], ['recolor', () => recolorCasts()],
+      ['slice', () => updateSlice(slice.pres)], ['sect', () => onSect()],
+      ['iso', () => buildIsoSheets()], ['thermo', () => buildThermo()],
+      ['timeline', () => drawTimeline()], ['status', () => timeStatus()], ['insets', () => drawInsets()],
+    ];
+    const sub = {};
+    for (const nm of ['solveLayer', 'layerField', 'heightSurface', 'fishnet', 'median3x3', 'expandFine', 'paintField', 'drawContours', 'drawProfilePanel', 'drawTSPanel', 'oiSetup', 'layerCasts', 'buildSheet']) {
+      const orig = eval(nm);
+      const w = function (...a) { const t0 = performance.now(); const r = orig.apply(this, a); sub[nm] = (sub[nm] || 0) + performance.now() - t0; return r; };
+      eval(nm + ' = w');
+    }
+    {
+      const proto = THREE.BufferGeometry.prototype, orig = proto.computeVertexNormals;
+      proto.computeVertexNormals = function () { const t0 = performance.now(); orig.call(this); sub.normals = (sub.normals || 0) + performance.now() - t0; };
+    }
+    const acc = stages.map(() => []);
+    for (let i = 0; i < 10; i++) {
+      TIME.t = tOf(i);
+      stages.forEach(([, fn], k) => { const t0 = performance.now(); fn(); acc[k].push(performance.now() - t0); });
+    }
+    say('tick ' + stages.map(([n], k) => `${n}=${med(acc[k]).toFixed(1)}`).join(' '));
+    say('sub ' + Object.entries(sub).map(([k, v]) => `${k}=${(v / 10).toFixed(1)}`).join(' '));
+    let nObj = 0, nTri = 0; scene.traverse(o => { if (o.isMesh || o.isLine || o.isLineSegments || o.isPoints) nObj++; });
+    say(`objects=${nObj} groups cast=${castGroup.children.length} mark=${markGroup.children.length} isoRing=${isoRingGroup.children.length} thermo=${thermoGroup.children.length} iso=${isoGroup.children.length}`);
+    // frame: wrap the per-frame calls and orbit for 90 frames
+    const tm = { render: [], labels: [], gizmo: [], frame: [] };
+    const wrap = (fn, key) => function (...a) { const t0 = performance.now(); const r = fn.apply(this, a); tm[key].push(performance.now() - t0); return r; };
+    renderer.render = wrap(renderer.render.bind(renderer), 'render');
+    updateLabels = wrap(updateLabels, 'labels');
+    drawGizmo = wrap(drawGizmo, 'gizmo');
+    controls.autoRotate = true; controls.autoRotateSpeed = 30;
+    TIME.playing = false;
+    let n = 0, last = 0;
+    const tickF = now => {
+      if (last) tm.frame.push(now - last); last = now;
+      if (++n < 90) { requestAnimationFrame(tickF); return; }
+      const inf = renderer.info.render;
+      say(`nav render=${med(tm.render).toFixed(1)} labels=${med(tm.labels).toFixed(2)} gizmo=${med(tm.gizmo).toFixed(2)} frame=${med(tm.frame).toFixed(1)} calls=${inf.calls} tris=${inf.triangles} lines=${inf.lines} px=${renderer.domElement.width}x${renderer.domElement.height} dpr=${renderer.getPixelRatio()}`);
+      // play: same, with the timeline running
+      for (const k in tm) tm[k].length = 0;
+      TIME.playing = true; setTime(T.tMin, true); n = 0; last = 0;
+      const tickP = now => {
+        if (last) tm.frame.push(now - last); last = now;
+        if (++n < 90) { requestAnimationFrame(tickP); return; }
+        say(`play render=${med(tm.render).toFixed(1)} frame=${med(tm.frame).toFixed(1)} calls=${renderer.info.render.calls}`);
+        say('done');
+      };
+      requestAnimationFrame(tickP);
+    };
+    requestAnimationFrame(tickF);
+  }, 1500);
+}

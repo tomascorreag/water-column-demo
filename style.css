@@ -187,7 +187,7 @@ body.showcase #provenance,
 body.showcase #legend .keys,
 body.showcase #title .modes { display: none !important; }
 body.showcase #prov-short { display: block; font-size: 10.5px; color: var(--muted); line-height: 1.45;
-  margin-top: 6px; max-width: 480px; }
+  margin-top: 6px; max-width: 640px; }
 body.showcase #timeline { right: 14px; }
 body.showcase #tour { top: 92px; width: 360px; max-height: calc(100vh - 380px); overflow-y: auto; }
 body.showcase #tour-cap { font-size: 13.5px; line-height: 1.6; }
@@ -197,7 +197,7 @@ body.showcase #prov-short a { color: var(--muted); }
 /* ---------- left column ----------
    The walkthrough sits above the controls it is talking about, in the column
    the opening card hands off to. */
-#leftcol { position: fixed; left: 16px; top: 92px; width: 376px; z-index: 3;
+#leftcol { position: fixed; left: 16px; top: 112px; width: 376px; z-index: 3;
   display: flex; flex-direction: column; gap: 12px; }
 body.showcase #tour, body.showcase #guide {
   position: static; width: auto; top: auto; left: auto; max-height: none; overflow: visible; }
