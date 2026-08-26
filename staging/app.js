@@ -26,7 +26,7 @@ if (SHOWCASE) {
   // every panel starts hidden; the introduction is the only thing that reveals
   // them, one step at a time
   for (const id of ['title', 'exag-badge', 'guide', 'tour', 'row-casts', 'row-thermo',
-    'row-bathy', 'insets', 'timeline', 'legend'])
+    'row-bathy', 'insets', 'timeline', 'legend', 'compass'])
     document.getElementById(id).classList.add('rv');
   // where each panel sits is style.css's business (one grid, grid-area per
   // mode and breakpoint): the guide has the top of the left column, the
@@ -405,11 +405,15 @@ function computeViewShift() {
     const el = document.getElementById(id);
     return el && getComputedStyle(el).display !== 'none' ? el.getBoundingClientRect() : null;
   };
-  let l = 0, top = innerHeight;
-  for (const id of ['guide', 'tour', 'insets']) { const r = rect(id); if (r && r.width) l = Math.max(l, r.right); }
+  let l = 0, top = innerHeight, right = innerWidth;
+  for (const id of ['tour', 'insets']) { const r = rect(id); if (r && r.width) l = Math.max(l, r.right); }
   for (const id of ['insets', 'timeline']) { const r = rect(id); if (r && r.height) top = Math.min(top, r.top); }
-  const lf = l / innerWidth, bf = (innerHeight - top) / innerHeight;
-  scBase.x = Math.min(0.12, Math.max(0.03, SC_SHIFT_X * lf / SC_REF.l));
+  // the walkthrough card is in the right column, so it takes room off the
+  // other side: the shift is what the left column occupies *net of* it, and it
+  // can reach zero -- with both edges covered the scene belongs in the middle
+  { const r = rect('guide'); if (r && r.width) right = Math.min(right, r.left); }
+  const lf = (l - (innerWidth - right)) / innerWidth, bf = (innerHeight - top) / innerHeight;
+  scBase.x = Math.min(0.12, Math.max(0, SC_SHIFT_X * lf / SC_REF.l));
   scBase.y = Math.min(0.16, Math.max(0.05, SC_SHIFT_Y * bf / SC_REF.b));
 }
 function applyViewShift() {
@@ -747,9 +751,30 @@ const pins = [];                                   // cast indices, max 3
 // opaque list is drawn before every sheet, which is the order required.
 // Without MSAA, alpha-to-coverage degrades to a 0.5 cutoff, so the two-material
 // scheme is kept as the fallback there.
+//
+// The trap in that, and it bit: three always asks for a canvas WITH an alpha
+// channel, and a material that is not `transparent` has blending switched off,
+// so the tube wrote its own alpha into the framebuffer at every sample it
+// covered. That is a hole in the canvas's opacity, and the sheet — depth-
+// rejected at exactly those samples — could not fill it back in. The browser
+// then composited the hole over the page and the page colour came through,
+// bleaching a tube-shaped band out of everything already drawn behind it.
+// Measured: colour 0.599 at alpha 0.31 over the 0.894 ground resolved to 0.973,
+// brighter than the ground it should have darkened, so the pycnocline read as
+// missing behind a faded tube and came back only once the tube reached zero and
+// stopped covering anything. CustomBlending fixes it without moving the tube
+// out of the opaque queue (three forces blending off only for NormalBlending):
+// ONE/ZERO on RGB is what no blending did, since coverage has already done the
+// mixing, and ZERO/ONE on alpha leaves the canvas opaque. Anything else that
+// draws with blending off must keep its alpha at 1 for the same reason.
 const MSAA = (() => { const gl = renderer.getContext(); return gl.getParameter(gl.SAMPLES) > 0; })();
 const tubeMat = MSAA
-  ? new THREE.MeshBasicMaterial({ vertexColors: true, alphaToCoverage: true, depthWrite: true })
+  ? new THREE.MeshBasicMaterial({
+    vertexColors: true, alphaToCoverage: true, depthWrite: true,
+    blending: THREE.CustomBlending,
+    blendSrc: THREE.OneFactor, blendDst: THREE.ZeroFactor,          // replace RGB
+    blendSrcAlpha: THREE.ZeroFactor, blendDstAlpha: THREE.OneFactor, // keep the canvas opaque
+  })
   : new THREE.MeshBasicMaterial({ vertexColors: true, transparent: true, depthWrite: true });
 // fallback only: a faded tube is a decayed claim, not a wall, so below full
 // weight it stops writing depth and takes the transparent sort
@@ -2558,6 +2583,7 @@ function applyView(v) {
 // has no business turning the scene round. The intro is the one caller that
 // asks for a specific one.
 function tweenTo(v, e, ms = 1100, force = false) {
+  camTween = null;                                 // two things steering the camera is one too many
   if (camera === ortho) goPersp();
   const from = camNow();
   if (v.az == null) v = { ...v, az: from.az };
@@ -2968,6 +2994,7 @@ const AXES = [
 const _q = new THREE.Quaternion(), _d = new THREE.Vector3();
 let gizmoHits = [];
 function drawGizmo() {
+  if (SHOWCASE) return;                            // display:none there; the compass has the cell
   const ctx = gizmo.getContext('2d');
   ctx.setTransform(DPR2, 0, 0, DPR2, 0, 0);
   ctx.clearRect(0, 0, GZ, GZ);
@@ -3011,12 +3038,13 @@ function snapView(dir) {
   if (Math.abs(to.y) > 0.999) to.x = to.z = 0.02 * Math.sign(to.y || 1);   // keep OrbitControls' polar clamp happy
   to.normalize();
   if (reducedMotion) { camera.position.copy(controls.target).addScaledVector(to, r); controls.update(); goOrtho(to); return; }
-  camTween = { from, to, r, t0: performance.now(), ms: 450, then: () => goOrtho(to) };
+  camTween = { from, to, r, r1: r, t0: performance.now(), ms: 450, then: () => goOrtho(to) };
 }
 // Snapped views are orthographic (as in Blender); any rotation away returns to
 // perspective. Frustum height is matched at the orbit distance so the swap is
 // visually continuous; OrbitControls drives ortho.zoom for the wheel.
 let snapDir = null;
+let compassBack = null;                            // the orbit the map view was entered from
 function goOrtho(dir) {
   const r = camera.position.distanceTo(controls.target);
   const halfH = r * Math.tan(THREE.MathUtils.degToRad(persp.fov / 2));
@@ -3034,6 +3062,7 @@ function goPersp() {
   const r = halfH / Math.tan(THREE.MathUtils.degToRad(persp.fov / 2));
   persp.position.copy(controls.target).addScaledVector(dir, r);
   snapDir = null;
+  compassBack = null;                              // any way out of the map view is a way out
   camera = persp; controls.object = persp; controls.update();
 }
 controls.addEventListener('change', () => {
@@ -3057,6 +3086,156 @@ gizmo.addEventListener('pointermove', ev => {
   const hit = gizmoHits.some(it => Math.hypot(it.x - x, it.y - y) <= GB + 1) || Math.hypot(x - GZ / 2, y - GZ / 2) <= 12;
   gizmo.style.cursor = hit ? 'pointer' : 'default';
 });
+
+// ---------- compass (showcase) ----------
+// The showcase has no axis gizmo: it is a demonstration, not an instrument,
+// and a set of labelled axis balls is a modelling control. It still turns,
+// though, and a viewer who has turned it has no way of telling which way
+// north is or of getting back. So: a compass rose lying flat on the sea
+// surface, drawn through the live camera rather than as a 2D dial, which is
+// what makes it read the tilt as well as the heading -- a circle seen from
+// overhead, a line seen from the side, and the ellipse between. Clicking it
+// flies to the map view the opening holds on; clicking it again returns the
+// orbit it left.
+const compass = $('compass');
+const CS = 84, CR = CS * 0.30;                     // canvas units; style.css sizes the box
+compass.width = compass.height = CS * DPR2;
+const C_INK = '28,33,40', C_ACC = '180,83,9';      // --ink, --accent
+let compassOver = false;
+const _cw = new THREE.Vector3(), _cz = new THREE.Vector3(), _cq = new THREE.Quaternion();
+// a point of the ground plane at bearing `a` (0 = north, + towards east) and
+// radius `r` in ring units, projected through the camera into canvas px; the
+// third component is its depth, positive towards the viewer
+function cpt(a, r) {
+  _cw.set(Math.sin(a) * r, 0, -Math.cos(a) * r).applyQuaternion(_cq);
+  return [CS / 2 + _cw.x * CR, CS / 2 - _cw.y * CR, _cw.z];
+}
+function drawCompass() {
+  if (!SHOWCASE || !compass.classList.contains('in')) return;   // nothing to draw before the step that reveals it
+  const ctx = compass.getContext('2d');
+  ctx.setTransform(DPR2, 0, 0, DPR2, 0, 0);
+  ctx.clearRect(0, 0, CS, CS);
+  const c = CS / 2;
+  const lift = compassOver ? 1.25 : 1;             // no plate to brighten on hover; the ink takes it
+  _cq.copy(camera.quaternion).invert();
+
+  // No plate. The rose is drawn straight onto the scene, which is the whole
+  // point of a compass that lies in it -- but the ground is light and a tube
+  // is not, so every stroke carries a tight white halo instead. That is a
+  // legibility floor, not a background: it follows the ink rather than
+  // boxing it, so nothing is hidden behind the widget.
+  ctx.shadowColor = `rgba(255,255,255,${compassOver ? 0.95 : 0.8})`;
+  ctx.shadowBlur = 3;
+
+  // the ring, split at the horizon of its own plane. The depth of a
+  // ground-plane point at bearing a is sin(a)*Ez + cos(a)*Nz, zero at
+  // atan2(-Nz, Ez) and positive over the half turn above it, and drawing that
+  // half stronger is the only depth cue a flat ellipse has. How much stronger
+  // is `tilt` = hypot(Ez, Nz) = cos(elevation): overhead the two halves are
+  // the same ring and any split would be an artefact of a rounding error.
+  _cz.set(1, 0, 0).applyQuaternion(_cq); const ez = _cz.z;
+  _cz.set(0, 0, -1).applyQuaternion(_cq); const nz = _cz.z;
+  const horizon = Math.atan2(-nz, ez);
+  const tilt = Math.min(1, Math.hypot(ez, nz));
+  const arc = (from, to, alpha, w) => {
+    ctx.beginPath();
+    for (let i = 0; i <= 48; i++) {
+      const p = cpt(from + (to - from) * i / 48, 1);
+      if (i) ctx.lineTo(p[0], p[1]); else ctx.moveTo(p[0], p[1]);
+    }
+    ctx.strokeStyle = `rgba(${C_INK},${Math.min(1, alpha * lift).toFixed(3)})`; ctx.lineWidth = w; ctx.stroke();
+  };
+  arc(horizon - Math.PI, horizon, 0.44 - 0.28 * tilt, 1.3 - 0.3 * tilt);
+  arc(horizon, horizon + Math.PI, 0.44, 1.3);
+
+  // E, S, W as ticks; north is the needle
+  for (const b of [Math.PI / 2, Math.PI, -Math.PI / 2]) {
+    const p = cpt(b, 1);
+    ctx.fillStyle = `rgba(${C_INK},${Math.min(1, (0.42 - 0.28 * Math.max(0, -p[2])) * lift).toFixed(3)})`;
+    ctx.beginPath(); ctx.arc(p[0], p[1], 1.7, 0, Math.PI * 2); ctx.fill();
+  }
+
+  // the needle is two triangles in the ground plane, so it lies down with the
+  // rose instead of standing up off it. Tail first: on an edge-on view the
+  // two overlap and the head is the half that has to survive.
+  const b1 = cpt(Math.PI / 2, 0.2), b2 = cpt(-Math.PI / 2, 0.2);
+  const tri = (p, fill) => {
+    ctx.beginPath(); ctx.moveTo(p[0], p[1]); ctx.lineTo(b1[0], b1[1]); ctx.lineTo(b2[0], b2[1]);
+    ctx.closePath(); ctx.fillStyle = fill; ctx.fill();
+  };
+  tri(cpt(Math.PI, 0.6), `rgba(${C_INK},0.28)`);
+  tri(cpt(0, 0.94), `rgba(${C_ACC},0.92)`);
+  ctx.fillStyle = `rgba(${C_INK},0.55)`;
+  ctx.beginPath(); ctx.arc(c, c, 1.7, 0, Math.PI * 2); ctx.fill();
+
+  // the letter stays upright: it is a label, not part of the rose
+  const lp = cpt(0, 1.26);
+  ctx.font = '600 9.5px Segoe UI, sans-serif';
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillStyle = `rgba(${C_INK},0.72)`;
+  ctx.fillText('N', lp[0], lp[1]);
+
+  // in the map view the rose is a circle and the needle is straight up, which
+  // says nothing about there being a way back: the rim does
+  if (compassBack) {
+    ctx.strokeStyle = `rgba(${C_ACC},0.55)`; ctx.lineWidth = 1.2;
+    ctx.beginPath(); ctx.arc(c, c, c - 1.6, 0, Math.PI * 2); ctx.stroke();
+  }
+}
+// The map view is the one the opening holds on: straight down, north up, the
+// domain circle filling the frame, orthographic on arrival because a map has
+// no vanishing point. Built from the same two numbers introStart() uses, so
+// the two cannot drift apart. The exaggeration and the orbit centre are left
+// alone -- a compass turns the camera, it does not rescale the scene.
+function flyTo(to, r1, then) {
+  const off = camera.position.clone().sub(controls.target);
+  const r = off.length();
+  if (reducedMotion) {
+    camera.position.copy(controls.target).addScaledVector(to, r1);
+    controls.update(); then?.(); return;
+  }
+  camTween = { from: off.normalize(), to: to.clone(), r, r1, t0: performance.now(), ms: 900, then };
+}
+function compassToggle() {
+  const back = compassBack;                        // read before goPersp(), which clears it
+  compassBack = null;
+  if (camera === ortho) goPersp();                 // the flight is a perspective orbit either way
+  if (back) { compass.title = 'map view'; flyTo(back.dir, back.r, null); return; }
+  const off = camera.position.clone().sub(controls.target);
+  compassBack = { dir: off.clone().normalize(), r: off.length() };
+  compass.title = 'back to the last view';
+  // 0.005 rad off vertical, as in introStart(): straight up is OrbitControls'
+  // polar limit and the azimuth stops meaning anything there
+  const to = new THREE.Vector3(0, 1, 0.005).normalize();
+  flyTo(to, H0 / Math.tan(THREE.MathUtils.degToRad(FOV1 / 2)), () => goOrtho(to));
+}
+// Where it hangs is a measurement. The compass is meant to sit on the top edge
+// of whatever holds the bottom right -- the timeline, or the colour ramp once a
+// short viewport moves it there -- and that edge is set by the height of the
+// plots and by the breakpoint, so there is no constant to write. It shares the
+// guide's cell (card pinned to the top, this to the bottom) and a negative
+// bottom margin drops it the rest of the way; the correction is relative, so it
+// is a no-op once it is right and converges in one pass from anywhere.
+// Positions are read with offsetTop, not getBoundingClientRect: the panels are
+// mid-reveal transform for the first 600 ms of their life and offsets are not.
+const C_HANG = 8;                                  // clear of the panel it hangs on
+function placeCompass() {
+  if (!SHOWCASE) return;
+  if (MOBILE) { compass.style.marginBottom = ''; return; }
+  let top = innerHeight;
+  for (const id of ['timeline', 'legend']) {
+    const el = $(id);
+    if (!el || getComputedStyle(el).display === 'none') continue;
+    if (el.offsetLeft + el.offsetWidth <= compass.offsetLeft) continue;   // a different column
+    top = Math.min(top, el.offsetTop);
+  }
+  const cur = parseFloat(compass.style.marginBottom) || 0;
+  const delta = (top - C_HANG) - (compass.offsetTop + compass.offsetHeight);
+  compass.style.marginBottom = (cur - delta) + 'px';
+}
+compass.addEventListener('click', () => { if (controls.enabled) compassToggle(); });
+compass.addEventListener('pointerenter', () => { compassOver = true; });
+compass.addEventListener('pointerleave', () => { compassOver = false; });
 
 // ---------- hover / click ----------
 
@@ -3188,6 +3367,22 @@ let downPos = null;
 renderer.domElement.addEventListener('pointerdown', ev => {
   downPos = [ev.clientX, ev.clientY];
   if (ev.pointerType === 'touch') hideReadout();
+});
+// A drag on the scene while a flight is in the air is the viewer taking the
+// camera back. The flight stops where it is rather than fighting the orbit for
+// the rest of its 900 ms, and since nothing has been snapped yet the camera is
+// still perspective, so the drag simply continues from wherever the tween had
+// got to -- no cut, and no lerp pulling against the pointer. If it had already
+// landed, the map view is orthographic, and this leaves it for perspective on
+// the gesture rather than after the 0.02 rad the 'change' handler waits for,
+// so there is no moment where a drag is turning an orthographic camera.
+// Threshold, not the first move: a click that pins a cast is not a rotation.
+renderer.domElement.addEventListener('pointermove', ev => {
+  if (!downPos || !ev.buttons || (!camTween && camera !== ortho)) return;
+  if (Math.hypot(ev.clientX - downPos[0], ev.clientY - downPos[1]) < 3) return;
+  camTween = null;
+  compassBack = null;
+  if (camera === ortho) goPersp();
 });
 renderer.domElement.addEventListener('pointerup', ev => {
   if (!downPos) return;
@@ -3384,7 +3579,9 @@ const AZ0 = Math.atan2(0.95, 1);                   // the scene's default headin
 // adds them, so a panel cannot appear early by accident.
 const REVEAL = {
   descent: ['title', 'exag-badge'],
+  '-1': ['guide'],                                 // the disclaimer, before any panel
   0: ['guide', 'tour', 'row-casts', 'legend'],   // the profiles and the ramp
+  1: ['compass'],                                  // drag to turn -> a heading
   2: ['insets'],                                   // click a tube -> plots
   3: ['timeline'],                                 // drag the playhead
   4: ['row-thermo'],                               // switch the layer on
@@ -3392,6 +3589,7 @@ const REVEAL = {
 };
 function reveal(key) {
   for (const id of REVEAL[key] || []) $(id).classList.add('in');
+  placeCompass();
 }
 function revealAll() {
   for (const k of Object.keys(REVEAL)) reveal(k);
@@ -3433,6 +3631,18 @@ const FTUE = [
     done: () => $('tg-thermo').checked
   },
 ];
+// Step 00. The register is deliberately flatter than the steps that follow:
+// this is the one card that is not selling the instrument. The split it draws
+// is data against rendering: the casts are real and cited, and every way they
+// are drawn is a proposal for a tool, not a reading of this ocean. Erring
+// wide on purpose -- it costs nothing here and a scientist who finds one
+// over-claim stops believing the rest.
+const DISCLAIMER =
+  `<b>This is a concept, not a working tool.</b> The data is real and public, but every ` +
+  `representation of it here is conceptual: a sketch of what such a tool could be, made ` +
+  `for the OceanX Science Impact Challenge. Nothing on screen should be read as an ` +
+  `accurate picture of this ocean. <b>No OceanX data is used.</b>`;
+
 // what the ring should be pointing at on each step; a cast is projected from
 // the scene, everything else is a control that can be found in the DOM
 const FOCUS = { 2: { ci: () => focusCast }, 3: { playhead: true }, 4: { sel: '#row-thermo' } };
@@ -3481,6 +3691,25 @@ function updateFocus() {
   st.width = st.height = S + 'px';
 }
 
+// The card is off in the right column while the eye is in the middle of the
+// scene, so it has to be able to say "this changed". Two rings shed from its
+// edge, three times, on a new step -- and again if the step is waiting on an
+// action that has not come. Not while the focus ring is up: that ring is
+// already pointing at the control the step is about, and two accent pulses at
+// once point at nothing.
+const NUDGE_MS = 7800, NUDGE_IDLE = 11000;
+let nudgeTimer = 0, ftueShownAt = 0;
+function guideNudge() {
+  ftueShownAt = performance.now();                 // set first: the idle clock
+  const g = $('guide');                            // restarts whether or not
+  if (!SHOWCASE || MOBILE || !g) return;            // there is a card to ring
+  g.classList.remove('nudge');
+  void g.offsetWidth;                              // restart, not queue
+  g.classList.add('nudge');
+  clearTimeout(nudgeTimer);
+  nudgeTimer = setTimeout(() => g.classList.remove('nudge'), NUDGE_MS);
+}
+
 // manual: reached by the back button. The step's action has usually been done
 // already, so auto-advance is off until the viewer clicks next.
 let ftueManual = false, ftueDoneAt = null;
@@ -3492,6 +3721,18 @@ function ftueShow(i, manual = false) {
   setFocus(i);
   $('g-num').textContent = String(Math.min(i + 1, FTUE.length)).padStart(2, '0');
   $('ftue-back').style.visibility = i > 0 ? 'visible' : 'hidden';
+  if (i < 0) {
+    // step 00: what this is, before anything is claimed by it. It gates the
+    // walkthrough rather than sitting beside it, because a viewer who reads
+    // one line of a demo reads the first one.
+    $('g-num').textContent = '00';
+    $('ftue-dots').innerHTML = FTUE.map(() => '<i></i>').join('');
+    $('ftue-text').innerHTML = DISCLAIMER;
+    $('ftue-skip').style.display = '';
+    $('ftue-next').textContent = 'start';
+    guideNudge();
+    return;
+  }
   if (i >= FTUE.length) {
     // the closing card: what is left to do, with no step attached to it
     reveal('end');
@@ -3502,6 +3743,7 @@ function ftueShow(i, manual = false) {
     $('ftue-back').style.visibility = 'hidden';
     $('ftue-skip').style.display = 'none';
     $('ftue-next').textContent = 'done';
+    guideNudge();
     return;
   }
   if (i === 3) ftueT0 = TIME.t;
@@ -3509,11 +3751,14 @@ function ftueShow(i, manual = false) {
   $('ftue-dots').innerHTML = FTUE.map((_, k) =>
     `<i class="${k === i ? 'on' : k < i ? 'past' : ''}"></i>`).join('');
   $('ftue-next').textContent = i === FTUE.length - 1 ? 'done' : 'next';
+  guideNudge();
 }
 // a step clears when its action is done; steps with `linger` wait that long
 // after it so the viewer sees the result before the text moves on
 function ftueCheck() {
-  if (ftueStep < 0 || ftueStep >= FTUE.length || ftueManual) return;
+  if (ftueStep < 0 || ftueStep >= FTUE.length) return;
+  if (!focusOn && performance.now() - ftueShownAt > NUDGE_IDLE) guideNudge();
+  if (ftueManual) return;
   const st = FTUE[ftueStep];
   if (!st.done || !st.done()) { ftueDoneAt = null; return; }
   if (!st.linger) { ftueShow(ftueStep + 1); return; }
@@ -3773,7 +4018,7 @@ function introTick(now) {
       interp(tc, [f0 + 0.1 * D, f0 + 0.45 * D], [0, 1]);
   }
   cue('descent', tc, () => reveal('descent'));
-  cue('step', tc, () => { controls.enabled = true; ftueShow(0); });
+  cue('step', tc, () => { controls.enabled = true; ftueShow(-1); });
   cue('end', tc, () => {
     introDone = true;
     for (const m of markGroup.children) m.scale.setScalar(1);
@@ -3873,9 +4118,9 @@ if (MOBILE) document.querySelector('#insets .hint').textContent =
     // rather than only behind it.
     setTimeOn(true); setTime((T.tMin + T.tMax) / 2);
     if (q.get('bathy') === '1') { $('sc-bathy').checked = true; setBathy(true); }
-    // ?ftue=skip lands in the working view with no box; ?ftue=N lands there on
-    // step N. Both exist so a still can be captured of any state without
-    // waiting out the opening move.
+    // ?ftue=skip lands in the working view with no box; ?ftue=note on the
+    // disclaimer that gates the walk; ?ftue=N lands there on step N. All exist
+    // so a still can be captured of any state without waiting out the opening.
     const fq = q.get('ftue');
     // ?intro=SECONDS freezes the opening at that instant, for stills of any
     // frame of it; ?ftue=card is the frame with every cast in and the header full
@@ -3886,7 +4131,7 @@ if (MOBILE) document.querySelector('#insets .hint').textContent =
       introDone = true;
       applyView(WORK);
       revealAll();
-      ftueShow(fq === 'skip' ? FTUE.length : +fq);
+      ftueShow(fq === 'skip' ? FTUE.length : fq === 'note' ? -1 : +fq);
     } else if (MOBILE) {
       // the opening is a camera move with constants tuned to a wide viewport,
       // and it costs a phone several seconds of the worst frames it will draw
@@ -3895,13 +4140,14 @@ if (MOBILE) document.querySelector('#insets .hint').textContent =
       introDone = true;
       applyView(WORK);
       revealAll();
-      ftueShow(0);
+      ftueShow(-1);
     } else introStart(performance.now());
   } else if (q.has('step')) runTour(+q.get('step')); else runTour(0);
   if (q.has('var')) setVar(q.get('var'));
   if (q.has('mode')) setMode(q.get('mode'));
   if (q.has('exag')) setExag(Math.max(1, +q.get('exag')));
   if (q.has('view')) setView(q.get('view'));
+  if (q.has('map') && controls.enabled) compassToggle();   // stills of the map view; not while the opening is on rails
   if (q.has('snap')) { const m = { iso: [1, 1, 1], top: [0, 1, 0], e: [1, 0, 0], n: [0, 0, -1] }[q.get('snap')]; if (m) snapView(new THREE.Vector3(...m)); }
   if (q.has('unc')) setUnc(+q.get('unc'));
   if (q.has('ltscale')) {
@@ -4097,6 +4343,7 @@ function relayout() {
   // toggle stands until the viewport crosses the line again
   if (PROV_OPEN_MQ.matches !== provOpenWas) { provOpenWas = PROV_OPEN_MQ.matches; $('prov-box').open = provOpenWas; }
   sizeInsets(); drawInsets(); drawLegend(); drawTimeline();
+  placeCompass();
   computeViewShift();
   if (introT0 == null || introDone) { scShift.x = scBase.x; scShift.y = scBase.y; }
   applyViewShift();
@@ -4157,7 +4404,8 @@ function frame(now) {
     const k = Math.min(1, (now - camTween.t0) / camTween.ms);
     const e = 1 - Math.pow(1 - k, 3);
     _d.copy(camTween.from).lerp(camTween.to, e).normalize();   // nlerp is fine for < 180°
-    camera.position.copy(controls.target).addScaledVector(_d, camTween.r);
+    camera.position.copy(controls.target)
+      .addScaledVector(_d, camTween.r + (camTween.r1 - camTween.r) * e);
     if (k >= 1) { const t = camTween; camTween = null; controls.update(); t.then?.(); }
   }
   ftueCheck();
@@ -4166,6 +4414,7 @@ function frame(now) {
   renderer.render(scene, camera);
   updateLabels();
   drawGizmo();
+  drawCompass();
   placeReadout();
 }
 requestAnimationFrame(frame);
@@ -4240,7 +4489,7 @@ if (new URLSearchParams(location.search).has('bench')) {
 // Throwaway measurement, like ?bench=1.
 if (new URLSearchParams(location.search).has('layoutcheck')) {
   setTimeout(() => {
-    const ids = ['title', 'gizmo', 'tour', 'guide', 'rail', 'insets', 'timeline', 'legend', 'prov-box', 'exag-badge'];
+    const ids = ['title', 'gizmo', 'compass', 'tour', 'guide', 'rail', 'insets', 'timeline', 'legend', 'prov-box', 'exag-badge'];
     const R = [];
     for (const id of ids) {
       const el = $(id);
@@ -4265,3 +4514,7 @@ if (new URLSearchParams(location.search).has('layoutcheck')) {
     document.title = `LAYOUT|${innerWidth}x${innerHeight}|` + (bad.length ? bad.join(',') : 'ok');
   }, 1500);
 }
+
+
+
+
