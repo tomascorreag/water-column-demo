@@ -1,0 +1,367 @@
+/* Data-first theme, light. Paper-grey ground (not white) so the bright end of
+   every sequential ramp and the VSUP neutral grey both stay visible; chrome is
+   neutral, accent colours are reserved for pinned profiles so they never read
+   as data. */
+
+:root {
+  --ground: #e4e7eb;
+  --panel: rgba(255, 255, 255, 0.90);
+  --panel-edge: #b9c0c8;
+  --ink: #1c2128;
+  --muted: #5b6470;
+  --accent: #b45309;
+  --pin1: #d97706;
+  --pin2: #db2777;
+  --pin3: #059669;
+  --mono: "Cascadia Code", "Cascadia Mono", Consolas, ui-monospace, monospace;
+  --sans: "Segoe UI", system-ui, sans-serif;
+  --ink-panel: #171b21;
+  --on-ink: #e9edf1;
+  --on-ink-mute: #97a1ac;
+  --accent-lift: #f0904a;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+html, body {
+  height: 100%; overflow: hidden;
+  background: var(--ground); color: var(--ink);
+  font-family: var(--sans); font-size: 13px;
+}
+
+#scene { position: fixed; inset: 0; }
+#scene canvas { display: block; }
+
+/* projected 3D labels */
+#labels { position: fixed; inset: 0; pointer-events: none; z-index: 1; }
+#labels .lb {
+  position: absolute; transform: translate(-50%, -50%);
+  font-family: var(--mono); font-size: 11px; color: var(--ink);
+  text-shadow: 0 0 3px #fff, 0 0 3px #fff, 0 0 2px #fff; white-space: nowrap;
+}
+#labels .lb.axis { color: #000; }
+#labels .lb.iso { font-size: 11px; padding: 1px 4px; border-radius: 3px; background: rgba(255,255,255,.7); text-shadow: none; }
+#labels .lb.pin { font-weight: 700; }
+
+.hud { position: fixed; z-index: 2; }
+.panel {
+  background: var(--panel); border: 1px solid var(--panel-edge);
+  border-radius: 6px; padding: 10px 12px;
+}
+
+#title { top: 14px; left: 16px; }
+#title h1 { font-size: 15px; font-weight: 600; }
+#title .sub { font-size: 11px; color: var(--muted); margin-top: 2px; }
+.modes { margin-top: 8px; display: inline-flex; border: 1px solid var(--panel-edge); border-radius: 4px; overflow: hidden; }
+.modes button, .seg button {
+  font-family: var(--sans); font-size: 12px; padding: 4px 12px; cursor: pointer;
+  background: var(--panel); color: var(--muted); border: 0;
+}
+.modes button.on, .seg button.on { background: var(--ink); color: #fff; }
+.seg { display: inline-flex; border: 1px solid var(--panel-edge); border-radius: 4px; overflow: hidden; }
+.seg button { padding: 3px 9px; }
+.seg.small button { padding: 1px 7px; font-size: 11px; }
+.seg button + button { border-left: 1px solid var(--panel-edge); }
+
+#gizmo { top: 14px; right: 336px; border-radius: 50%; }
+
+#exag-badge {
+  top: 14px; left: 50%; transform: translateX(-50%);
+  font-family: var(--mono); font-size: 12px; color: var(--accent);
+  background: rgba(255,255,255,.75); padding: 3px 9px; border-radius: 4px;
+}
+
+#unc-badge {
+  top: 40px; left: 50%; transform: translateX(-50%); display: none;
+  font-family: var(--mono); font-size: 12px; color: #8a1c1c;
+  background: rgba(255,255,255,.82); border: 1px solid #d8b4b4; padding: 3px 9px; border-radius: 4px;
+}
+body.unc-off #unc-badge { display: block; }
+
+/* tour */
+#tour { top: 108px; left: 16px; width: 300px; }
+body.expert #tour { display: none; }
+#tour .steps { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 8px; }
+#tour .steps button {
+  font-family: var(--sans); font-size: 12px; padding: 3px 9px; cursor: pointer;
+  background: none; color: var(--ink); border: 1px solid var(--panel-edge); border-radius: 12px;
+}
+#tour .steps button.on { background: var(--ink); color: #fff; border-color: var(--ink); }
+#tour-cap { font-size: 12.5px; line-height: 1.5; color: var(--ink); }
+#tour-cap b { color: var(--accent); font-weight: 600; }
+#tour-cap .n { color: var(--muted); font-size: 11px; margin-top: 6px; display: block; }
+
+/* rail */
+#rail {
+  top: 14px; right: 14px; width: 306px;   /* 292 + room for the scrollbar */
+  font-size: 12px; overflow-y: auto; overflow-x: hidden;
+  /* stop above the legend column rather than sliding under it; the column is
+     legend + provenance stacked, so it is taller than it looks */
+  max-height: calc(100vh - 392px);
+}
+#rail h2 {
+  font-size: 10px; font-weight: 600; letter-spacing: 0.12em; text-transform: uppercase;
+  color: var(--muted); margin: 12px 0 5px;
+}
+#rail h2:first-child { margin-top: 0; }
+body.explain .expert-only { display: none !important; }
+.row { display: flex; align-items: center; gap: 8px; margin: 4px 0; }
+.row label { flex: 1; }
+.row .val { color: var(--accent); min-width: 58px; text-align: right; font-family: var(--mono); font-size: 11px; }
+.sub-row { margin-left: 14px; }
+.sub-row label { color: var(--muted); font-size: 11.5px; white-space: nowrap; }
+input[type="range"] { flex: 1.5; accent-color: var(--accent); height: 16px; }
+input[type="checkbox"] { accent-color: var(--accent); }
+button#btn-true, button#btn-clear {
+  font-family: var(--sans); font-size: 12px; background: none; color: var(--accent);
+  border: 1px solid var(--accent); border-radius: 4px; padding: 3px 10px; cursor: pointer;
+}
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+/* insets */
+#insets { left: 16px; bottom: 12px; width: 612px; display: flex; gap: 10px; flex-wrap: wrap; align-items: flex-end; padding: 8px 10px 6px; }
+#insets .inset .cap { font-size: 10.5px; color: var(--muted); margin-bottom: 3px; }
+#insets canvas { display: block; }
+#insets .hint { width: 100%; font-size: 10.5px; color: var(--muted); }
+
+/* legend */
+#rightcol { right: 14px; bottom: 8px; width: 306px; display: flex; flex-direction: column; gap: 6px; }
+#legend { padding: 8px 12px 8px; }
+#legend .cap { font-size: 12px; margin-bottom: 4px; }
+#legend canvas { display: block; width: 100%; }
+#legend .note { font-size: 10.5px; color: var(--muted); margin-top: 4px; line-height: 1.4; }
+#legend .keys { display: flex; flex-direction: column; gap: 2px; font-size: 10.5px; color: var(--muted); margin-top: 5px; }
+#legend .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; vertical-align: 0; }
+#legend .dot.d { background: #1c2128; }
+#legend .dot.r { border: 2px solid #1c2128; width: 9px; height: 9px; }
+
+/* timeline: the free band between the 2D insets and the legend column */
+#timeline { left: 644px; right: 334px; bottom: 12px; min-width: 380px; padding: 7px 10px 6px; }
+#timeline canvas { display: block; width: 100%; }
+.tl-head { display: flex; align-items: center; gap: 8px; margin-bottom: 2px; }
+.tl-head button {
+  font-family: var(--sans); font-size: 12px; background: none; color: var(--accent);
+  border: 1px solid var(--accent); border-radius: 4px; padding: 2px 9px; cursor: pointer;
+}
+.tl-head button:disabled { color: var(--muted); border-color: var(--panel-edge); cursor: default; }
+.tl-now { font-family: var(--mono); font-size: 11.5px; color: var(--ink); margin-left: auto; }
+.tl-ms { font-family: var(--mono); font-size: 10.5px; color: var(--muted); }
+.tl-note { font-size: 10.5px; color: var(--muted); line-height: 1.45; margin-top: 3px; }
+.tl-note b { color: var(--accent); font-weight: 600; }
+#tl { cursor: ew-resize; touch-action: none; }
+
+/* readout */
+#readout {
+  display: none; position: fixed; z-index: 3;
+  background: var(--panel); border: 1px solid var(--panel-edge); border-radius: 4px;
+  padding: 6px 9px; font-family: var(--mono); font-size: 11px; line-height: 1.5;
+  pointer-events: none; white-space: pre;
+}
+#readout .k { color: var(--muted); }
+
+#provenance { font-size: 9.5px; color: var(--muted); line-height: 1.4; }
+
+
+/* ?ui=none / ?ui=min — strip the console down for still capture (proposal
+   figures). min keeps the legend and the exaggeration badge. */
+body.figure #tour, body.figure #rail, body.figure #insets, body.figure #timeline,
+body.figure #title, body.figure #provenance, body.figure #readout,
+body.figure #gizmo { display: none !important; }
+body.figure.nolegend #rightcol { display: none !important; }
+/* the 3D tag on the pycnocline / iso-surface: it names the object, which a
+   figure caption does instead. Depth and graticule labels stay. */
+body.figure .lb.iso { display: none !important; }
+/* ?grid=off — no reference frame at all: the projected labels go with the
+   graticule/axis lines that anchor them */
+body.nogrid #labels { display: none !important; }
+
+
+/* ---------- showcase build ----------
+   Everything that makes this an instrument rather than a demonstration is
+   removed: the control rail, the linked 2D views, the axis gizmo, the mode
+   switch. Navigation is rotate, zoom and the playhead. */
+#prov-short, .sc-toggles { display: none; }
+body.showcase #rail,
+body.showcase #gizmo,
+body.showcase #provenance,
+body.showcase #legend .keys,
+body.showcase #title .modes { display: none !important; }
+body.showcase #prov-short { display: block; font-size: 10.5px; color: var(--muted); line-height: 1.45; }
+body.showcase #tour { top: 92px; width: 360px; max-height: calc(100vh - 380px); overflow-y: auto; }
+body.showcase #tour-cap { font-size: 13.5px; line-height: 1.6; }
+body.showcase #tour-steps, body.showcase #tour-cap { display: none; }
+body.showcase #prov-short a { color: var(--muted); }
+
+/* ---------- left column ----------
+   The walkthrough sits above the controls it is talking about, in the column
+   the opening card hands off to. */
+#leftcol { position: fixed; left: 16px; top: 92px; width: 376px; z-index: 3;
+  display: flex; flex-direction: column; gap: 12px; }
+body.showcase #tour, body.showcase #guide {
+  position: static; width: auto; top: auto; left: auto; max-height: none; overflow: visible; }
+#leftstack { position: fixed; left: 16px; bottom: 12px; z-index: 3;
+  display: flex; flex-direction: column; align-items: flex-start; gap: 10px; }
+body.showcase #leftstack #tour, body.showcase #leftstack #legend, body.showcase #leftstack #insets {
+  position: static; bottom: auto; left: auto; }
+body.showcase #leftstack #tour { width: 306px; }
+body.showcase #leftstack #legend { width: 306px; }
+
+/* ---------- the guide ----------
+   Inverted on purpose: this is a layer over the instrument, not another one of
+   its panels, and the inversion is what says so without a label. */
+#guide { display: none; }
+body.showcase #guide {
+  display: block; background: var(--ink-panel); color: var(--on-ink);
+  border-radius: 10px; padding: 15px 18px 14px;
+  box-shadow: 0 12px 34px rgba(23, 27, 33, .20), inset 0 1px 0 rgba(255, 255, 255, .06);
+}
+.g-head { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+.g-num { font-family: var(--mono); font-size: 11px; letter-spacing: .22em; color: var(--accent-lift); }
+.g-rule { flex: 1; height: 1px; background: rgba(255, 255, 255, .15); }
+#ftue-text { font-size: 14.5px; line-height: 1.62; color: var(--on-ink); }
+#ftue-text b { color: var(--accent-lift); font-weight: 600; }
+#ftue-text kbd {
+  font-family: var(--mono); font-size: 11px; padding: 1px 6px; border-radius: 4px;
+  background: rgba(255, 255, 255, .10); border: 1px solid rgba(255, 255, 255, .16);
+  color: var(--on-ink); white-space: nowrap;
+}
+.g-foot { display: flex; align-items: center; gap: 8px; margin-top: 16px; }
+.g-gap { flex: 1; }
+#ftue-dots { display: flex; gap: 5px; }
+#ftue-dots i { width: 5px; height: 5px; border-radius: 50%; background: rgba(255,255,255,.22); display: block; }
+#ftue-dots i.on { background: var(--on-ink); }
+#ftue-dots i.past { background: var(--accent-lift); }
+
+/* ---------- buttons ---------- */
+.btn-primary {
+  font-family: var(--sans); font-size: 12.5px; font-weight: 600; letter-spacing: .01em;
+  padding: 7px 17px; border: 0; border-radius: 6px; cursor: pointer;
+  background: var(--on-ink); color: var(--ink-panel);
+  transition: background .18s ease, transform .18s ease;
+}
+.btn-primary:hover { background: #fff; transform: translateY(-1px); }
+.btn-primary:active { transform: none; }
+.btn-ghost {
+  font-family: var(--sans); font-size: 12.5px; padding: 7px 13px; border-radius: 6px;
+  border: 1px solid transparent; background: none; color: var(--on-ink-mute); cursor: pointer;
+  transition: color .18s ease, border-color .18s ease;
+}
+.btn-ghost:hover { color: var(--on-ink); border-color: rgba(255, 255, 255, .22); }
+.btn-ghost.dark { color: var(--muted); }
+.btn-ghost.dark:hover { color: var(--ink); border-color: var(--panel-edge); }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* ---------- focus ring ----------
+   Says where to look. Tracks a DOM control, or a cast projected from the scene. */
+#focus {
+  position: fixed; z-index: 6; pointer-events: none; border-radius: 9px;
+  border: 1.5px solid var(--accent); box-shadow: 0 0 0 4px rgba(180, 83, 9, .12);
+  opacity: 0; transition: opacity .35s ease;
+}
+#focus.on { opacity: 1; }
+#focus::after {
+  content: ''; position: absolute; inset: -7px; border-radius: 14px;
+  border: 1.5px solid var(--accent); animation: focuspulse 1.9s ease-out infinite;
+}
+@keyframes focuspulse {
+  0% { transform: scale(.94); opacity: .55; }
+  75% { transform: scale(1.09); opacity: 0; }
+  100% { opacity: 0; }
+}
+/* the playhead step: a nudge above the marker, swaying the way the drag goes,
+   and the marker's own glyph inline in the guide text so the word and the
+   thing are tied */
+#draghint {
+  position: fixed; z-index: 6; pointer-events: none; opacity: 0; transition: opacity .35s ease;
+  font-family: var(--mono); font-size: 10px; letter-spacing: .14em; text-transform: uppercase;
+  color: var(--accent); background: rgba(255, 255, 255, .92); border: 1px solid var(--accent);
+  border-radius: 4px; padding: 2px 7px; white-space: nowrap; translate: -50% 0;
+}
+#draghint.on { opacity: 1; animation: dragsway 1.6s ease-in-out infinite; }
+@keyframes dragsway { 0%, 100% { transform: translateX(-7px); } 50% { transform: translateX(7px); } }
+.ph-glyph { display: inline-block; position: relative; width: 11px; height: 15px; vertical-align: -3px; margin: 0 2px; }
+.ph-glyph::before { content: ''; position: absolute; left: 0; top: 0; border-left: 5.5px solid transparent;
+  border-right: 5.5px solid transparent; border-top: 6px solid var(--accent-lift); }
+.ph-glyph::after { content: ''; position: absolute; left: 4.75px; top: 5px; width: 1.5px; height: 10px; background: var(--accent-lift); }
+body.showcase #btn-alltime { display: none; }
+body.showcase .sc-toggles { display: flex; flex-direction: column; margin-bottom: 6px; }
+.sc-toggles label { display: flex; align-items: center; gap: 7px; font-size: 12.5px;
+  color: var(--ink); cursor: pointer; margin-bottom: 5px; }
+/* a hidden toggle takes no room: fading one in place would leave a gap where a
+   row the viewer has not earned yet is going to appear */
+.sc-toggles label.rv { max-height: 0; margin-bottom: 0; overflow: hidden;
+  transition: opacity .5s ease, max-height .5s ease, margin-bottom .5s ease; }
+.sc-toggles label.rv.in { max-height: 2.2em; margin-bottom: 5px; transform: none; }
+#tour-cap hr { border: 0; border-top: 1px solid #d8dce2; margin: 11px 0; }
+#tour-cap a { color: var(--accent); }
+#tour-cap details { margin-top: 8px; }
+#tour-cap summary { cursor: pointer; color: var(--muted); font-size: 11px; }
+#tour-cap details[open] summary { margin-bottom: 4px; }
+#tour-cap details { color: var(--muted); font-size: 11px; line-height: 1.5; }
+
+
+/* ---------- opening card ----------
+   Left column, no panel chrome: type sits on the field over a scrim of the
+   ground colour, and hands off to #title and #tour, which live in the same
+   column. The face is the mono one the instrument already speaks in -- a plot
+   header, not a hero. */
+#introcard { display: none; }
+body.showcase #introcard {
+  display: block; position: fixed; z-index: 4;
+  left: 0; top: 50%; translate: 0 -50%;
+  padding: 0 64px 0 40px; width: min(560px, 62vw);
+  font-family: var(--mono);
+  background: linear-gradient(90deg,
+    rgba(228,231,235,.97) 0%, rgba(228,231,235,.93) 55%, rgba(228,231,235,0) 100%);
+}
+/* every line of the card is driven per frame by the opening's clock (app.js
+   introTick), not by CSS transitions: the state at an instant is computed,
+   so a skip or a still lands on the right frame. .out only takes it out of
+   the hit-test once it has faded. */
+body.showcase #introcard.out { visibility: hidden; pointer-events: none; }
+.ic-eyebrow {
+  font-size: 11px; letter-spacing: .34em; text-transform: uppercase;
+  color: var(--muted); margin-bottom: 14px;
+}
+.ic-title {
+  font-size: clamp(30px, 4.4vw, 52px); font-weight: 400; line-height: 1.06;
+  letter-spacing: .2em; text-transform: uppercase; color: var(--ink);
+}
+.ic-rule { height: 1px; background: var(--ink); opacity: .55; margin: 26px 0 16px; width: 78%;
+  transform-origin: 0 50%; }
+.ic-log { display: grid; grid-template-columns: max-content 1fr; gap: 5px 20px; font-size: 11.5px; }
+.ic-log dt { color: var(--muted); letter-spacing: .16em; text-transform: uppercase; }
+.ic-log dd { color: var(--ink); }
+.ic-about { font-family: var(--sans); font-size: 13.5px; line-height: 1.55; color: var(--ink);
+  max-width: 360px; margin-top: 18px; }
+.ic-foot { display: flex; align-items: center; gap: 18px; margin-top: 26px; }
+.btn-primary.dark { background: var(--ink); color: #fff; }
+.btn-primary.dark:hover { background: #000; }
+#ic-skip {
+  background: none; border: 0; border-bottom: 1px solid var(--muted);
+  padding: 0 0 2px; border-radius: 0; font-family: var(--mono); font-size: 10.5px;
+  letter-spacing: .24em; text-transform: uppercase; color: var(--muted); cursor: pointer;
+}
+#ic-skip:hover { color: var(--ink); border-bottom-color: var(--ink); }
+
+/* ---------- callout ----------
+   Names the first cast on the chart. Anchored on the dot; the leader runs
+   up-right to the text. */
+#callout { display: none; }
+body.showcase #callout {
+  display: block; position: fixed; z-index: 4; pointer-events: none;
+  width: 0; height: 0; opacity: 0; font-family: var(--mono);
+}
+.co-lead { position: absolute; left: 7px; top: -7px; width: 66px; height: 1px;
+  background: var(--ink); transform: rotate(-35deg); transform-origin: 0 50%; }
+.co-text { position: absolute; left: 62px; top: -62px; white-space: nowrap;
+  display: flex; flex-direction: column; gap: 3px; padding: 0 0 2px 8px;
+  border-left: 1px solid var(--ink); }
+.co-k { font-size: 10.5px; letter-spacing: .22em; text-transform: uppercase; color: var(--ink); }
+.co-v { font-size: 11px; color: var(--muted); }
+
+/* ---------- staged reveal ----------
+   Nothing appears before the step that asks for it. */
+.rv { opacity: 0; transform: translateY(7px); pointer-events: none;
+      transition: opacity .6s ease, transform .6s ease; }
+.rv.in { opacity: 1; transform: none; pointer-events: auto; }
