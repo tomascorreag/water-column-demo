@@ -1,0 +1,648 @@
+/* Data-first theme, light. Paper-grey ground (not white) so the bright end of
+   every sequential ramp and the VSUP neutral grey both stay visible; chrome is
+   neutral, accent colours are reserved for pinned profiles so they never read
+   as data. */
+
+:root {
+  --ground: #e4e7eb;
+  --panel: rgba(255, 255, 255, 0.90);
+  --panel-edge: #b9c0c8;
+  --ink: #1c2128;
+  --muted: #5b6470;
+  --accent: #b45309;
+  --pin1: #d97706;
+  --pin2: #db2777;
+  --pin3: #059669;
+  --mono: "Cascadia Code", "Cascadia Mono", Consolas, ui-monospace, monospace;
+  --sans: "Segoe UI", system-ui, sans-serif;
+  --ink-panel: #171b21;
+  --on-ink: #e9edf1;
+  --on-ink-mute: #97a1ac;
+  --accent-lift: #f0904a;
+
+  /* ---- layout tokens ----
+     1rem = 13px up to ~1700px wide, then it grows to 17px by 2700 so the
+     chrome does not sit tiny in the corners of a 1440p/4K monitor at 100 %.
+     Panel widths are in rem so they follow; borders, the scene labels and
+     everything a canvas draws inside itself stay in px. */
+  --gap: 0.77rem;                    /* 10 */
+  --edge-x: 1.23rem;                 /* 16 */
+  --edge-y: 1.08rem;                 /* 14 */
+  --rail-w: 23.5rem;                 /* 306: 292 + room for the scrollbar */
+  --tour-w: 23rem;                   /* 300 */
+  --guide-w: 28.9rem;                /* 376 */
+  --plot-w: 14.6rem;                 /* 190 */
+  --plot-h: 15.4rem;                 /* 200 */
+  --plot-gap: 0.77rem;
+  /* the left column is as wide as the three plots side by side */
+  --left-w: calc(3 * var(--plot-w) + 2 * var(--plot-gap) + 1.54rem);
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+/* the root size is the only place px meets rem; body re-states 1rem so a
+   later `html, body` rule cannot quietly reset it to the UA's 16px */
+html { font-size: clamp(13px, 0.4vw + 6.2px, 17px); }
+html, body {
+  height: 100%; overflow: hidden;
+  background: var(--ground); color: var(--ink);
+  font-family: var(--sans);
+}
+body { font-size: 1rem; }
+
+#scene { position: fixed; inset: 0; }
+#scene canvas { display: block; }
+
+/* projected 3D labels */
+#labels { position: fixed; inset: 0; pointer-events: none; z-index: 1; }
+#labels .lb {
+  position: absolute; transform: translate(-50%, -50%);
+  font-family: var(--mono); font-size: 11px; color: var(--ink);
+  text-shadow: 0 0 3px #fff, 0 0 3px #fff, 0 0 2px #fff; white-space: nowrap;
+}
+#labels .lb.axis { color: #000; }
+#labels .lb.iso { font-size: 11px; padding: 1px 4px; border-radius: 3px; background: rgba(255,255,255,.7); text-shadow: none; }
+#labels .lb.pin { font-weight: 700; }
+
+/* ---------- the HUD grid ----------
+   One fixed overlay, one grid. The container is inert to the pointer so the
+   scene underneath gets every drag that is not on a panel; panels opt back
+   in. Rows: header | the free middle | the bottom band. The rail and the
+   tour sit in the middle row and scroll inside it, so what used to be
+   `max-height: calc(100vh - 392px)` is now the row the grid leaves them. */
+#hud {
+  position: fixed; inset: 0; z-index: 2; pointer-events: none;
+  display: grid; gap: var(--gap);
+  padding: var(--edge-y) var(--edge-x) var(--edge-y);
+  grid-template-columns: var(--left-w) minmax(0, 1fr) var(--rail-w);
+  grid-template-rows: auto minmax(0, 1fr) auto auto;
+  grid-template-areas:
+    "title  top    rail"
+    "tour   .      rail"
+    "insets tl     legend"
+    "insets tl     prov";
+}
+#hud > * { min-width: 0; min-height: 0; pointer-events: auto; }
+.panel {
+  background: var(--panel); border: 1px solid var(--panel-edge);
+  border-radius: 6px; padding: 10px 12px;
+}
+
+#title { grid-area: title; max-width: 100%; align-self: start; }
+#title h1 { font-size: 1.154rem; font-weight: 600; }
+#title .sub { font-size: .846rem; color: var(--muted); margin-top: 2px; }
+.modes { margin-top: 8px; display: inline-flex; border: 1px solid var(--panel-edge); border-radius: 4px; overflow: hidden; }
+.modes button, .seg button {
+  font-family: var(--sans); font-size: .923rem; padding: 4px 12px; cursor: pointer;
+  background: var(--panel); color: var(--muted); border: 0;
+}
+.modes button.on, .seg button.on { background: var(--ink); color: #fff; }
+.seg { display: inline-flex; border: 1px solid var(--panel-edge); border-radius: 4px; overflow: hidden; }
+.seg button { padding: 3px 9px; }
+.seg.small button { padding: 1px 7px; font-size: .846rem; }
+.seg button + button { border-left: 1px solid var(--panel-edge); }
+
+#gizmo { grid-area: top; justify-self: end; align-self: start; border-radius: 50%; }
+
+/* the badges are centred on the viewport, not on a column: they annotate the
+   scene, which is full-width */
+#exag-badge, #unc-badge {
+  position: absolute; left: 50%; translate: -50% 0; pointer-events: none;
+  font-family: var(--mono); font-size: .923rem; padding: 3px 9px; border-radius: 4px;
+}
+#exag-badge { top: var(--edge-y); color: var(--accent); background: rgba(255,255,255,.75); }
+#unc-badge {
+  top: calc(var(--edge-y) + 2rem); display: none;
+  color: #8a1c1c; background: rgba(255,255,255,.82); border: 1px solid #d8b4b4;
+}
+body.unc-off #unc-badge { display: block; }
+
+/* tour */
+#tour { grid-area: tour; width: var(--tour-w); align-self: start; max-height: 100%; overflow-y: auto; overflow-x: hidden; }
+body.expert #tour { display: none; }
+#tour .steps { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 8px; }
+#tour .steps button {
+  font-family: var(--sans); font-size: .923rem; padding: 3px 9px; cursor: pointer;
+  background: none; color: var(--ink); border: 1px solid var(--panel-edge); border-radius: 12px;
+}
+#tour .steps button.on { background: var(--ink); color: #fff; border-color: var(--ink); }
+#tour-cap { font-size: .962rem; line-height: 1.5; color: var(--ink); }
+#tour-cap b { color: var(--accent); font-weight: 600; }
+#tour-cap .n { color: var(--muted); font-size: .846rem; margin-top: 6px; display: block; }
+
+/* rail */
+#rail {
+  grid-area: rail; align-self: start; max-height: 100%;
+  font-size: .923rem; overflow-y: auto; overflow-x: hidden;
+}
+#rail h2 {
+  font-size: .769rem; font-weight: 600; letter-spacing: 0.12em; text-transform: uppercase;
+  color: var(--muted); margin: 12px 0 5px;
+}
+#rail h2:first-child { margin-top: 0; }
+body.explain .expert-only { display: none !important; }
+.row { display: flex; align-items: center; gap: 8px; margin: 4px 0; }
+.row label { flex: 1; }
+.row .val { color: var(--accent); min-width: 4.5rem; text-align: right; font-family: var(--mono); font-size: .846rem; }
+.sub-row { margin-left: 14px; }
+.sub-row label { color: var(--muted); font-size: .885rem; white-space: nowrap; }
+input[type="range"] { flex: 1.5; accent-color: var(--accent); height: 16px; min-width: 0; }
+input[type="checkbox"] { accent-color: var(--accent); }
+button#btn-true, button#btn-clear {
+  font-family: var(--sans); font-size: .923rem; background: none; color: var(--accent);
+  border: 1px solid var(--accent); border-radius: 4px; padding: 3px 10px; cursor: pointer;
+}
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+/* insets: three plot boxes sized by --plot-w/--plot-h; app.js allocates each
+   bitmap to the box it finds */
+#insets {
+  grid-area: insets; align-self: end; justify-self: start;
+  display: grid; grid-template-columns: repeat(3, var(--plot-w)); gap: 6px var(--plot-gap);
+  align-items: end; padding: 8px 10px 6px;
+}
+#insets .inset .cap { font-size: .808rem; color: var(--muted); margin-bottom: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#insets canvas { display: block; width: var(--plot-w); height: var(--plot-h); }
+#insets .hint { grid-column: 1 / -1; font-size: .808rem; color: var(--muted); }
+
+/* legend */
+#legend { grid-area: legend; align-self: end; padding: 8px 12px 8px; }
+#legend .cap { font-size: .923rem; margin-bottom: 4px; }
+#legend canvas { display: block; width: 100%; }
+#legend .note { font-size: .808rem; color: var(--muted); margin-top: 4px; line-height: 1.4; }
+#legend .keys { display: flex; flex-direction: column; gap: 2px; font-size: .808rem; color: var(--muted); margin-top: 5px; }
+#legend .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; vertical-align: 0; }
+#legend .dot.d { background: #1c2128; }
+#legend .dot.r { border: 2px solid #1c2128; width: 9px; height: 9px; }
+
+/* timeline: whatever the bottom band leaves between the plots and the legend */
+#timeline { grid-area: tl; align-self: end; padding: 7px 10px 6px; }
+#timeline canvas { display: block; width: 100%; }
+.tl-head { display: flex; align-items: center; gap: 8px; margin-bottom: 2px; flex-wrap: wrap; }
+.tl-head button {
+  font-family: var(--sans); font-size: .923rem; background: none; color: var(--accent);
+  border: 1px solid var(--accent); border-radius: 4px; padding: 2px 9px; cursor: pointer;
+}
+.tl-head button:disabled { color: var(--muted); border-color: var(--panel-edge); cursor: default; }
+.tl-now { font-family: var(--mono); font-size: .885rem; color: var(--ink); margin-left: auto; }
+.tl-ms { font-family: var(--mono); font-size: .808rem; color: var(--muted); }
+.tl-note { font-size: .808rem; color: var(--muted); line-height: 1.45; margin-top: 3px; }
+.tl-note b { color: var(--accent); font-weight: 600; }
+#tl { cursor: ew-resize; touch-action: none; }
+
+/* readout */
+#readout {
+  display: none; position: fixed; z-index: 3;
+  background: var(--panel); border: 1px solid var(--panel-edge); border-radius: 4px;
+  padding: 6px 9px; font-family: var(--mono); font-size: .846rem; line-height: 1.5;
+  pointer-events: none; white-space: pre;
+}
+#readout .k { color: var(--muted); }
+
+/* method note: a <details>, open on a big screen, folded on a small one */
+#prov-box { grid-area: prov; align-self: end; font-size: .731rem; color: var(--muted); line-height: 1.4; }
+#prov-box summary { cursor: pointer; list-style: none; letter-spacing: .1em; text-transform: uppercase; font-size: .692rem; }
+#prov-box summary::-webkit-details-marker { display: none; }
+#prov-box summary::before { content: '+ '; }
+#prov-box[open] summary::before { content: '\2212 '; }
+#prov-box[open] summary { margin-bottom: 3px; }
+
+
+/* ?ui=none / ?ui=min — strip the console down for still capture (proposal
+   figures). min keeps the legend and the exaggeration badge. */
+body.figure #tour, body.figure #rail, body.figure #insets, body.figure #timeline,
+body.figure #title, body.figure #prov-box, body.figure #readout,
+body.figure #gizmo { display: none !important; }
+body.figure.nolegend #legend { display: none !important; }
+/* the 3D tag on the pycnocline / iso-surface: it names the object, which a
+   figure caption does instead. Depth and graticule labels stay. */
+body.figure .lb.iso { display: none !important; }
+/* ?grid=off — no reference frame at all: the projected labels go with the
+   graticule/axis lines that anchor them */
+body.nogrid #labels { display: none !important; }
+
+
+/* ---------- showcase build ----------
+   Everything that makes this an instrument rather than a demonstration is
+   removed: the control rail, the axis gizmo, the mode switch, the method
+   note. Navigation is rotate, zoom and the playhead. The left column is the
+   guide over the toggles over the colour legend over the plots, so the
+   layers, what their colour means and what a click on one gives are read in
+   one column; the timeline has the rest of the bottom edge. */
+#prov-short, .sc-toggles { display: none; }
+body.showcase #rail,
+body.showcase #gizmo,
+body.showcase #prov-box,
+body.showcase #legend .keys,
+body.showcase #title .modes { display: none !important; }
+body.showcase #hud {
+  grid-template-rows: auto minmax(0, 1fr) auto auto auto;
+  grid-template-areas:
+    "title  top    top"
+    "guide  .      ."
+    "tour   .      ."
+    "legend .      ."
+    "insets tl     tl";
+}
+body.showcase #title { width: var(--guide-w); }
+body.showcase #prov-short { display: block; font-size: .808rem; color: var(--muted); line-height: 1.45;
+  margin-top: 6px; }
+body.showcase #prov-short a { color: var(--muted); }
+body.showcase #tour { width: var(--tour-w); max-height: none; overflow: visible; align-self: end; }
+body.showcase #tour-cap { font-size: 1.038rem; line-height: 1.6; }
+body.showcase #tour-steps, body.showcase #tour-cap { display: none; }
+body.showcase #legend { width: var(--tour-w); }
+
+/* ---------- the guide ----------
+   Inverted on purpose: this is a layer over the instrument, not another one of
+   its panels, and the inversion is what says so without a label. */
+#guide { display: none; }
+body.showcase #guide {
+  display: block; grid-area: guide; width: var(--guide-w); align-self: start;
+  max-height: 100%; overflow-y: auto;
+  background: var(--ink-panel); color: var(--on-ink);
+  border-radius: 10px; padding: 15px 18px 14px;
+  box-shadow: 0 12px 34px rgba(23, 27, 33, .20), inset 0 1px 0 rgba(255, 255, 255, .06);
+}
+.g-head { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+.g-num { font-family: var(--mono); font-size: .846rem; letter-spacing: .22em; color: var(--accent-lift); }
+.g-rule { flex: 1; height: 1px; background: rgba(255, 255, 255, .15); }
+#ftue-text { font-size: 1.115rem; line-height: 1.62; color: var(--on-ink); }
+#ftue-text b { color: var(--accent-lift); font-weight: 600; }
+#ftue-text kbd {
+  font-family: var(--mono); font-size: .846rem; padding: 1px 6px; border-radius: 4px;
+  background: rgba(255, 255, 255, .10); border: 1px solid rgba(255, 255, 255, .16);
+  color: var(--on-ink); white-space: nowrap;
+}
+.g-foot { display: flex; align-items: center; gap: 8px; margin-top: 16px; }
+.g-gap { flex: 1; }
+#ftue-dots { display: flex; gap: 5px; }
+#ftue-dots i { width: 5px; height: 5px; border-radius: 50%; background: rgba(255,255,255,.22); display: block; }
+#ftue-dots i.on { background: var(--on-ink); }
+#ftue-dots i.past { background: var(--accent-lift); }
+
+/* ---------- buttons ---------- */
+.btn-primary {
+  font-family: var(--sans); font-size: .962rem; font-weight: 600; letter-spacing: .01em;
+  padding: 7px 17px; border: 0; border-radius: 6px; cursor: pointer;
+  background: var(--on-ink); color: var(--ink-panel);
+  transition: background .18s ease, transform .18s ease;
+}
+.btn-primary:hover { background: #fff; transform: translateY(-1px); }
+.btn-primary:active { transform: none; }
+.btn-ghost {
+  font-family: var(--sans); font-size: .962rem; padding: 7px 13px; border-radius: 6px;
+  border: 1px solid transparent; background: none; color: var(--on-ink-mute); cursor: pointer;
+  transition: color .18s ease, border-color .18s ease;
+}
+.btn-ghost:hover { color: var(--on-ink); border-color: rgba(255, 255, 255, .22); }
+.btn-ghost.dark { color: var(--muted); }
+.btn-ghost.dark:hover { color: var(--ink); border-color: var(--panel-edge); }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* ---------- focus ring ----------
+   Says where to look. Tracks a DOM control, or a cast projected from the scene. */
+#focus {
+  position: fixed; z-index: 6; pointer-events: none; border-radius: 9px;
+  border: 1.5px solid var(--accent); box-shadow: 0 0 0 4px rgba(180, 83, 9, .12);
+  opacity: 0; transition: opacity .35s ease;
+}
+#focus.on { opacity: 1; }
+#focus::after {
+  content: ''; position: absolute; inset: -7px; border-radius: 14px;
+  border: 1.5px solid var(--accent); animation: focuspulse 1.9s ease-out infinite;
+}
+@keyframes focuspulse {
+  0% { transform: scale(.94); opacity: .55; }
+  75% { transform: scale(1.09); opacity: 0; }
+  100% { opacity: 0; }
+}
+/* the playhead step: a nudge above the marker, swaying the way the drag goes,
+   and the marker's own glyph inline in the guide text so the word and the
+   thing are tied */
+#draghint {
+  position: fixed; z-index: 6; pointer-events: none; opacity: 0; transition: opacity .35s ease;
+  font-family: var(--mono); font-size: 10px; letter-spacing: .14em; text-transform: uppercase;
+  color: var(--accent); background: rgba(255, 255, 255, .92); border: 1px solid var(--accent);
+  border-radius: 4px; padding: 2px 7px; white-space: nowrap; translate: -50% 0;
+}
+#draghint.on { opacity: 1; animation: dragsway 1.6s ease-in-out infinite; }
+@keyframes dragsway { 0%, 100% { transform: translateX(-7px); } 50% { transform: translateX(7px); } }
+.ph-glyph { display: inline-block; position: relative; width: 11px; height: 15px; vertical-align: -3px; margin: 0 2px; }
+.ph-glyph::before { content: ''; position: absolute; left: 0; top: 0; border-left: 5.5px solid transparent;
+  border-right: 5.5px solid transparent; border-top: 6px solid var(--accent-lift); }
+.ph-glyph::after { content: ''; position: absolute; left: 4.75px; top: 5px; width: 1.5px; height: 10px; background: var(--accent-lift); }
+body.showcase #btn-alltime { display: none; }
+body.showcase .sc-toggles { display: flex; flex-direction: column; margin-bottom: 6px; }
+.sc-toggles label { display: flex; align-items: center; gap: 7px; font-size: .962rem;
+  color: var(--ink); cursor: pointer; margin-bottom: 5px; }
+/* a hidden toggle takes no room: fading one in place would leave a gap where a
+   row the viewer has not earned yet is going to appear */
+.sc-toggles label.rv { max-height: 0; margin-bottom: 0; overflow: hidden;
+  transition: opacity .5s ease, max-height .5s ease, margin-bottom .5s ease; }
+.sc-toggles label.rv.in { max-height: 2.2em; margin-bottom: 5px; transform: none; }
+#tour-cap hr { border: 0; border-top: 1px solid #d8dce2; margin: 11px 0; }
+#tour-cap a { color: var(--accent); }
+#tour-cap details { margin-top: 8px; }
+#tour-cap summary { cursor: pointer; color: var(--muted); font-size: .846rem; }
+#tour-cap details[open] summary { margin-bottom: 4px; }
+#tour-cap details { color: var(--muted); font-size: .846rem; line-height: 1.5; }
+
+
+/* ---------- opening card ----------
+   Left column, no panel chrome: type sits on the field over a scrim of the
+   ground colour, and hands off to #title and #tour, which live in the same
+   column. The face is the mono one the instrument already speaks in -- a plot
+   header, not a hero. */
+#introcard { display: none; }
+body.showcase #introcard {
+  display: block; position: fixed; z-index: 4;
+  left: 0; top: 50%; translate: 0 -50%;
+  padding: 0 64px 0 40px; width: min(560px, 62vw);
+  font-family: var(--mono);
+  background: linear-gradient(90deg,
+    rgba(228,231,235,.97) 0%, rgba(228,231,235,.93) 55%, rgba(228,231,235,0) 100%);
+}
+/* every line of the card is driven per frame by the opening's clock (app.js
+   introTick), not by CSS transitions: the state at an instant is computed,
+   so a skip or a still lands on the right frame. .out only takes it out of
+   the hit-test once it has faded. */
+body.showcase #introcard.out { visibility: hidden; pointer-events: none; }
+.ic-eyebrow {
+  font-size: 11px; letter-spacing: .34em; text-transform: uppercase;
+  color: var(--muted); margin-bottom: 14px;
+}
+.ic-title {
+  font-size: clamp(30px, 4.4vw, 52px); font-weight: 400; line-height: 1.06;
+  letter-spacing: .2em; text-transform: uppercase; color: var(--ink);
+}
+.ic-rule { height: 1px; background: var(--ink); opacity: .55; margin: 26px 0 16px; width: 78%;
+  transform-origin: 0 50%; }
+.ic-log { display: grid; grid-template-columns: max-content 1fr; gap: 5px 20px; font-size: 11.5px; }
+.ic-log dt { color: var(--muted); letter-spacing: .16em; text-transform: uppercase; }
+.ic-log dd { color: var(--ink); }
+.ic-about { font-family: var(--sans); font-size: 13.5px; line-height: 1.55; color: var(--ink);
+  max-width: 360px; margin-top: 18px; }
+.ic-foot { display: flex; align-items: center; gap: 18px; margin-top: 26px; }
+.btn-primary.dark { background: var(--ink); color: #fff; }
+.btn-primary.dark:hover { background: #000; }
+#ic-skip {
+  background: none; border: 0; border-bottom: 1px solid var(--muted);
+  padding: 0 0 2px; border-radius: 0; font-family: var(--mono); font-size: 10.5px;
+  letter-spacing: .24em; text-transform: uppercase; color: var(--muted); cursor: pointer;
+}
+#ic-skip:hover { color: var(--ink); border-bottom-color: var(--ink); }
+
+/* ---------- callout ----------
+   Names the first cast on the chart. Anchored on the dot; the leader runs
+   up-right to the text. */
+#callout { display: none; }
+body.showcase #callout {
+  display: block; position: fixed; z-index: 4; pointer-events: none;
+  width: 0; height: 0; opacity: 0; font-family: var(--mono);
+}
+.co-lead { position: absolute; left: 7px; top: -7px; width: 66px; height: 1px;
+  background: var(--ink); transform: rotate(-35deg); transform-origin: 0 50%; }
+.co-text { position: absolute; left: 62px; top: -62px; white-space: nowrap;
+  display: flex; flex-direction: column; gap: 3px; padding: 0 0 2px 8px;
+  border-left: 1px solid var(--ink); }
+.co-k { font-size: 10.5px; letter-spacing: .22em; text-transform: uppercase; color: var(--ink); }
+.co-v { font-size: 11px; color: var(--muted); }
+
+/* ---------- staged reveal ----------
+   Nothing appears before the step that asks for it. */
+.rv { opacity: 0; transform: translateY(7px); pointer-events: none;
+      transition: opacity .6s ease, transform .6s ease; }
+.rv.in { opacity: 1; transform: none; pointer-events: auto; }
+
+
+/* ---------- breakpoints ----------
+   The full layout needs ~1440 px across and ~860 up. Below that the plots
+   shrink first (they are the widest thing on the left), then the method
+   note folds (app.js), then the legend leaves the showcase's left column so
+   the guide keeps its height, then the timeline takes the whole bottom edge.
+   Nothing is meant to be comfortable below 1280x720; it is meant to not
+   overlap. */
+
+/* narrow: smaller plots, so the timeline keeps ~430 px at 1280; the badges
+   leave the viewport centre, where they would meet the title, for the left
+   edge of the centre column */
+@media (max-width: 1439px) {
+  :root { --plot-w: 11.5rem; --plot-h: 12.3rem; }
+  #exag-badge, #unc-badge { left: calc(var(--edge-x) + var(--left-w) + var(--gap)); translate: 0 0; }
+}
+
+/* short: the showcase legend moves to the bottom right so the guide, the
+   toggles and the plots have the left column to themselves */
+@media (max-height: 859px) {
+  body.showcase #hud {
+    grid-template-rows: auto minmax(0, 1fr) auto auto;
+    grid-template-areas:
+      "title  top    top"
+      "guide  .      ."
+      "tour   .      ."
+      "insets tl     legend";
+  }
+  body.showcase #legend { justify-self: end; }
+  #legend .keys { display: none; }
+}
+@media (max-height: 699px) {
+  :root { --plot-h: 11.5rem; }
+  #insets .hint { display: none; }
+}
+
+/* degrade band: below the 1280 target. Smaller still; the console timeline
+   goes under the plots across the whole width; the showcase drops the legend. */
+@media (max-width: 1199px) {
+  :root { --plot-w: 9.2rem; --plot-h: 10.8rem; --rail-w: 21rem; }
+  #hud {
+    grid-template-rows: auto minmax(0, 1fr) auto auto auto;
+    grid-template-areas:
+      "title  top    rail"
+      "tour   .      rail"
+      "insets .      rail"
+      "tl     tl     legend"
+      "tl     tl     prov";
+  }
+  #title .sub { display: none; }
+  #legend .keys { display: none; }
+  #gizmo { display: none; }   /* the centre column is ~280 px: badge or gizmo, not both */
+  body.showcase #hud {
+    grid-template-rows: auto minmax(0, 1fr) auto auto;
+    grid-template-areas:
+      "title  top    top"
+      "guide  .      ."
+      "tour   .      ."
+      "insets tl     tl";
+  }
+  body:not(.mobile).showcase #legend { display: none !important; }
+}
+
+
+/* ---------- phone / small screen ----------
+   app.js puts `mobile` on <body> from one media query (and ?mobile=0|1
+   overrides it), so every rule here keys on the class rather than on a width:
+   the JS side needs the same boolean for the input model and the notice, and
+   two definitions of "small" that could drift is one too many.
+
+   The shape is: a compact header, the scene taking whatever is left, the
+   timeline pinned to the bottom edge, and everything else — the rail, the
+   plots, the legend, the method note — moved into a sheet that slides up over
+   the scene. A phone has one column and one thing in focus at a time; the
+   three-column instrument layout is not that. */
+
+#mobilenote, #sheet, #sheet-btn { display: none; }
+
+body.mobile {
+  --edge-x: 0.62rem; --edge-y: 0.54rem; --gap: 0.46rem;
+  --plot-w: 7.4rem; --plot-h: 9.2rem; --plot-gap: 0.4rem;
+}
+
+/* the notice sits above the HUD and above the opening card, and the HUD's top
+   padding is grown by its measured height (--note-h, set in app.js) so it
+   pushes the header down instead of covering it */
+body.mobile #mobilenote {
+  display: flex; align-items: center; gap: 10px;
+  position: fixed; z-index: 9; left: 0; right: 0; top: 0;
+  padding: 9px 12px calc(9px + env(safe-area-inset-bottom, 0px));
+  background: var(--ink-panel); color: var(--on-ink);
+  box-shadow: 0 4px 18px rgba(23, 27, 33, .22);
+}
+body.mobile.mn-off #mobilenote { display: none; }
+.mn-body { flex: 1; font-size: 12px; line-height: 1.45; color: var(--on-ink-mute); }
+.mn-body b { color: var(--on-ink); font-weight: 600; }
+#mn-close {
+  flex: none; font-family: var(--sans); font-size: 12px; font-weight: 600;
+  padding: 6px 12px; border: 0; border-radius: 6px; cursor: pointer;
+  background: var(--on-ink); color: var(--ink-panel);
+}
+
+body.mobile #hud {
+  padding: calc(var(--edge-y) + var(--note-h, 0px)) var(--edge-x)
+           calc(var(--edge-y) + env(safe-area-inset-bottom, 0px));
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  grid-template-areas:
+    "title top  "
+    "badge badge"
+    ".     .    "
+    "tl    tl   ";
+}
+/* showcase: the walkthrough card and the layer toggles are the content, so
+   they keep the bottom of the scene and the timeline sits under them */
+body.mobile.showcase #hud {
+  grid-template-rows: auto auto minmax(0, 1fr) auto auto auto;
+  grid-template-areas:
+    "title top  "
+    "badge badge"
+    ".     .    "
+    "guide guide"
+    "tour  tour "
+    "tl    tl   ";
+}
+body.mobile #gizmo, body.mobile #prov-short { display: none !important; }
+body.mobile #title { width: auto; }
+body.mobile #title h1 { font-size: 1.08rem; }
+body.mobile #title .sub { display: none; }
+/* the exaggeration badge is the one thing here that is said twice: the rail
+   prints the factor beside its own slider and the walkthrough names it in
+   words. A phone has no room for a caption it already has. */
+body.mobile #exag-badge { display: none !important; }
+/* the uncertainty warning is not redundant, and it is long, so it stops being
+   an overlay and becomes a strip of its own under the header */
+body.mobile #unc-badge {
+  position: static; grid-area: badge; justify-self: stretch;
+  left: auto; top: auto; translate: none;
+  font-size: .78rem; line-height: 1.35; white-space: normal; text-align: right;
+}
+
+body.mobile #guide {
+  grid-area: guide; width: auto; align-self: end;
+  max-height: 42vh; overflow-y: auto; padding: 12px 14px 11px;
+}
+body.mobile #ftue-text { font-size: .96rem; line-height: 1.5; }
+body.mobile #tour {
+  grid-area: tour; width: auto; align-self: end; max-height: none; overflow: visible;
+}
+/* the toggles go across rather than down: three short labels fit one line and
+   the guide above them needs the height more */
+body.mobile.showcase .sc-toggles { flex-direction: row; flex-wrap: wrap; gap: 4px 14px; margin-bottom: 0; }
+body.mobile .sc-toggles label { font-size: .88rem; margin-bottom: 0; }
+body.mobile .sc-toggles label.rv.in { max-height: 2.2em; margin-bottom: 0; }
+body.mobile #timeline { padding: 5px 8px 4px; }
+body.mobile .tl-note { display: none; }
+body.mobile #readout { font-size: .8rem; max-width: 74vw; white-space: pre-wrap; }
+
+/* ---------- the sheet ----------
+   One scrolling column holding the panels app.js moved into it. It overlays
+   the whole grid column and rests on the bottom edge, so the timeline stays
+   where it is and the sheet covers it while open — which is what says the
+   sheet is the thing being used. */
+body.mobile #sheet {
+  display: flex; flex-direction: column; gap: var(--gap);
+  grid-row: 1 / -1; grid-column: 1 / -1; align-self: end; z-index: 4;
+  max-height: 76vh; overflow-y: auto; overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  /* its own ground, so the gaps between panels read as one surface over the
+     scene rather than as holes onto it */
+  background: var(--ground); border-top: 1px solid var(--panel-edge);
+  border-radius: 10px 10px 0 0; box-shadow: 0 -8px 26px rgba(23, 27, 33, .18);
+  padding: 9px 9px calc(9px + env(safe-area-inset-bottom, 0px));
+  transform: translateY(calc(100% + var(--edge-y) + 4rem));
+  transition: transform .26s ease;
+}
+body.mobile.sheet-open #sheet { transform: none; }
+/* inside the sheet a panel is a block in a column: its grid placement, its own
+   scrolling and its fixed widths all belong to the desktop layout */
+body.mobile #sheet > * {
+  grid-area: auto; width: auto; max-height: none; overflow: visible;
+  align-self: stretch; justify-self: stretch;
+}
+/* the three plots keep their row and scroll sideways rather than shrinking to
+   nothing: a profile plot 60 px wide is not a plot */
+body.mobile #sheet #insets { overflow-x: auto; overscroll-behavior-x: contain; }
+body.mobile #sheet #prov-box { padding: 0 2px 4px; }
+
+body.mobile #sheet-btn {
+  display: block; grid-area: top; justify-self: end; align-self: start;
+  font-family: var(--sans); font-size: .88rem; font-weight: 600;
+  padding: 6px 13px; border-radius: 6px; cursor: pointer;
+  background: var(--panel); color: var(--ink); border: 1px solid var(--panel-edge);
+}
+body.mobile.sheet-open #sheet-btn { background: var(--ink); color: #fff; border-color: var(--ink); z-index: 5; }
+/* a phone has no hover, so nothing may depend on one: touch targets get the
+   room that a cursor's precision would otherwise have saved */
+body.mobile .row { margin: 7px 0; }
+body.mobile input[type="range"] { height: 26px; }
+body.mobile input[type="checkbox"] { width: 18px; height: 18px; }
+body.mobile .modes button, body.mobile .seg button { padding: 6px 13px; }
+body.mobile .tl-head button, body.mobile button#btn-true, body.mobile button#btn-clear { padding: 5px 11px; }
+body.mobile #tour .steps button { padding: 5px 11px; }
+
+/* Landscape on a phone is short, not narrow: ~280 px of height under the
+   notice cannot stack a walkthrough card, the toggles and the timeline. The
+   card goes back into a left column — the shape the desktop showcase already
+   uses — at the mobile scale, and it sits in the free row rather than in one
+   of its own, so it is bounded by whatever the fixed bands leave instead of
+   pushing them off the bottom. */
+@media (min-aspect-ratio: 1 / 1) and (max-height: 560px) {
+  body.mobile #mobilenote { padding: 6px 10px; }
+  body.mobile .mn-body { font-size: 11px; line-height: 1.35; }
+  body.mobile #mn-close { font-size: 11px; padding: 4px 10px; }
+  body.mobile #title h1 { font-size: .96rem; }
+  body.mobile.showcase #hud {
+    grid-template-columns: minmax(0, 21rem) minmax(0, 1fr) auto;
+    grid-template-rows: auto minmax(0, 1fr) auto auto;
+    grid-template-areas:
+      "title badge top"
+      "guide .     .  "
+      "tour  .     .  "
+      "tl    tl    tl ";
+  }
+  body.mobile.showcase #guide { max-height: 100%; align-self: end; }
+  body.mobile #unc-badge { grid-area: badge; text-align: left; align-self: start; }
+  body.mobile #timeline { padding: 4px 8px 2px; }
+}
+
+/* too short to give the notice a row of its own: it floats over the header */
+body.mobile.mn-float #mobilenote { box-shadow: 0 6px 22px rgba(23, 27, 33, .34); }

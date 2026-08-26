@@ -1,0 +1,222 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Water Column Walkthrough</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body class="explain showcase">
+
+<div id="scene"></div>
+
+<!-- small-screen notice. Shown only when app.js has put `mobile` on <body>;
+     the console is a large-screen, mouse-and-wheel instrument and saying so is
+     better than letting a phone discover it. Dismissal is remembered for the
+     tab, not forever: a reload after a rotation should not re-nag. -->
+<div id="mobilenote">
+  <div class="mn-body"><b>Better on a computer.</b> This is a 3D console built for a large screen, a mouse and a scroll wheel. On a phone the layout is folded down and it runs slower &mdash; what it draws is the same data, from the same code.</div>
+  <button id="mn-close">Got it</button>
+</div>
+
+<!-- opening card: the page introduces itself the way a cast sheet does. Every
+     value is read out of the loaded dataset, never typed in. -->
+<div id="introcard">
+  <div class="ic-eyebrow" id="ic-eyebrow">welcome to</div>
+  <h2 class="ic-title" id="ic-title">the water<br>column</h2>
+  <p class="ic-about" id="ic-about">A concept demo of ocean measurements as a navigable volume.</p>
+  <div class="ic-rule" id="ic-rule"></div>
+  <dl class="ic-log" id="ic-log"></dl>
+  <div class="ic-foot">
+    <button id="ic-go" class="btn-primary dark">Cast CTDs</button>
+    <button id="ic-skip" class="btn-ghost dark">Skip intro</button>
+  </div>
+</div>
+<!-- the first cast, named: a leader from its dot on the chart -->
+<div id="callout"></div>
+<div id="labels"></div>
+
+<!-- the HUD is one grid over the scene; every panel is a direct child and is
+     placed by grid-area, per mode and per breakpoint, in style.css. Nothing in
+     here is position: fixed, so the reveal transform on a panel can never
+     become the containing block of another. -->
+<div id="hud">
+
+<div id="title">
+  <h1>Water column console</h1>
+  <div class="sub">83 Argo profiles &middot; 39 floats &middot; NW Atlantic (Gulf Stream / Sargasso Sea) &middot; June 2023</div>
+  <div class="modes" role="tablist">
+    <button id="mode-explain" class="on">Explain</button><button id="mode-expert">Expert</button>
+  </div>
+  <!-- showcase only: the source line reads as a footnote to the title -->
+  <div id="prov-short">
+    Public data, no OceanX data used.
+    Colour is temperature; how solid something is drawn is how much measurement stands behind it.
+    <a href="https://erddap.ifremer.fr/erddap/tabledap/ArgoFloats.html" target="_blank" rel="noopener">Argo via Ifremer ERDDAP</a> &middot;
+    <a href="https://www.gebco.net/" target="_blank" rel="noopener">GEBCO_2021</a> &middot;
+    layer after <a href="https://doi.org/10.1029/2018JC014526" target="_blank" rel="noopener">Feucher et al. 2019</a>,
+    mapped by <a href="https://currents.soest.hawaii.edu/ocn_data_analysis_files/Bretherton.1976.pdf" target="_blank" rel="noopener">objective analysis</a>.
+  </div>
+</div>
+
+<canvas id="gizmo" title="click an axis to snap the view · centre = isometric"></canvas>
+
+<div id="exag-badge">&times;<span id="exag-val"></span></div>
+<div id="unc-badge"></div>
+
+<!-- guided tour (explain mode) -->
+<div class="panel" id="tour">
+  <div class="steps" id="tour-steps"></div>
+  <div class="sc-toggles" id="sc-toggles">
+    <label id="row-casts"><input type="checkbox" id="sc-casts" checked> Profiles (measured)</label>
+    <label id="row-thermo"><input type="checkbox" id="sc-thermo" checked> Main thermocline (mapped)</label>
+    <label id="row-bathy"><input type="checkbox" id="sc-bathy"> Sea floor (GEBCO)</label>
+  </div>
+  <div id="tour-cap"></div>
+</div>
+
+<!-- the walkthrough is its own layer, not another instrument panel: inverted,
+     so it reads as something over the tool rather than part of it -->
+<div id="guide">
+  <div class="g-head">
+    <span class="g-num" id="g-num">01</span>
+    <span class="g-rule"></span>
+    <span id="ftue-dots"></span>
+  </div>
+  <div id="ftue-text"></div>
+  <div class="g-foot" id="g-foot">
+    <button id="ftue-back" class="btn-ghost">Back</button>
+    <span class="g-gap"></span>
+    <button id="ftue-skip" class="btn-ghost">Skip</button>
+    <button id="ftue-next" class="btn-primary">Next</button>
+  </div>
+</div>
+
+<!-- control rail -->
+<div class="panel" id="rail">
+  <h2>Colour by</h2>
+  <div class="seg" id="var-seg">
+    <button data-var="temp" class="on">Temp</button><button data-var="psal">Salinity</button><button data-var="sigma0">&sigma;&#8320;</button><button data-var="conf">Support</button>
+  </div>
+
+  <h2>Layers</h2>
+  <div class="row"><label for="tg-casts">Profiles (measured)</label><input type="checkbox" id="tg-casts" checked></div>
+  <div class="row"><label for="tg-slice">Depth slice (interpolated)</label><input type="checkbox" id="tg-slice" checked></div>
+  <div class="row"><label for="tg-sect">Vertical section (interpolated)</label><input type="checkbox" id="tg-sect" checked></div>
+  <div class="row"><label for="tg-iso" id="iso-lab">Isopycnal (interpolated)</label><input type="checkbox" id="tg-iso" checked></div>
+  <div class="row sub-row"><label for="sl-iso">value</label>
+    <input type="range" id="sl-iso" min="0" max="1000" value="500"><span class="val" id="v-iso"></span></div>
+  <div class="row"><label for="tg-thermo">Pycnocline volume (measured + mapped)</label><input type="checkbox" id="tg-thermo"></div>
+  <div class="row sub-row expert-only"><label for="sl-thermo">edge at fraction of peak N²</label>
+    <input type="range" id="sl-thermo" min="25" max="80" value="50"><span class="val" id="v-thermo"></span></div>
+
+  <h2>Slice &amp; section</h2>
+  <div class="row"><label for="sl-depth">Slice depth</label>
+    <input type="range" id="sl-depth" min="0" max="1000" value="150"><span class="val" id="v-depth"></span></div>
+  <div class="row"><label>Section axis</label>
+    <span class="seg small" id="sect-axis"><button data-ax="lon" class="on">N&ndash;S</button><button data-ax="lat">E&ndash;W</button></span></div>
+  <div class="row"><label for="sl-sect">Section at</label>
+    <input type="range" id="sl-sect" min="0" max="1000" value="500"><span class="val" id="v-sect"></span></div>
+  <div class="row expert-only"><label for="tg-contours">Contour lines</label><input type="checkbox" id="tg-contours" checked></div>
+
+  <h2>Support &amp; uncertainty</h2>
+  <div class="row"><label for="sl-unc">Uncertainty</label>
+    <input type="range" id="sl-unc" min="0" max="1000" value="1000"><span class="val" id="v-unc"></span></div>
+  <div class="row expert-only"><label for="tg-stipple">Also stipple low-support field</label><input type="checkbox" id="tg-stipple"></div>
+  <div class="row expert-only"><label for="sl-cut">Hide field below support</label>
+    <input type="range" id="sl-cut" min="0" max="500" value="0"><span class="val" id="v-cut"></span></div>
+
+  <h2>Scale</h2>
+  <div class="row"><label for="sl-exag">Vertical exaggeration</label>
+    <input type="range" id="sl-exag" min="0" max="1000" value="800"><span class="val" id="v-exag"></span></div>
+  <div class="row"><button id="btn-true">show true scale</button></div>
+
+  <h2 class="expert-only">Time</h2>
+  <div class="row expert-only"><label for="sl-lt">L<sub>t</sub> scale</label>
+    <input type="range" id="sl-lt" min="0" max="1000" value="500"><span class="val" id="v-lt"></span></div>
+  <div class="row expert-only"><label for="sl-rad">Tube radius</label>
+    <input type="range" id="sl-rad" min="20" max="150" value="55"><span class="val" id="v-rad"></span></div>
+  <div class="row expert-only"><button id="btn-clear">clear pinned profiles</button></div>
+</div>
+
+<!-- 2D linked views. The plot boxes are sized in CSS (--plot-w / --plot-h);
+     app.js reads the box and allocates the bitmap to match. -->
+<div class="panel" id="insets">
+  <div class="inset"><div class="cap">Temperature profile</div><canvas id="p-temp"></canvas></div>
+  <div class="inset"><div class="cap">Salinity profile</div><canvas id="p-psal"></canvas></div>
+  <div class="inset"><div class="cap">T&ndash;S diagram &middot; grey lines &sigma;&#8320;</div><canvas id="p-ts"></canvas></div>
+  <div class="hint">hover a tube to trace it, click to pin (up to 3). Grey = all 83 profiles.</div>
+</div>
+
+<!-- timeline -->
+<div class="panel" id="timeline">
+  <div class="tl-head">
+    <button id="btn-play">&#9654; play</button>
+    <button id="btn-alltime">back to timeline</button>
+    <span class="tl-ms expert-only" id="tl-ms">&ndash;</span>
+    <span class="tl-now" id="tl-now"></span>
+  </div>
+  <canvas id="tl"></canvas>
+  <div class="tl-note" id="tl-note"></div>
+</div>
+
+<div class="panel" id="legend">
+  <div class="cap" id="lg-title"></div>
+  <canvas id="lg-vsup" width="282" height="118"></canvas>
+  <div class="note" id="lg-note"></div>
+  <div class="keys">
+    <span><i class="dot d"></i>delayed-mode cast (calibrated, &plusmn;0.002&thinsp;&deg;C)</span>
+    <span><i class="dot r"></i>real-time cast (uncalibrated, nominal &plusmn;0.02&thinsp;&deg;C)</span>
+  </div>
+</div>
+
+<!-- method note. Open on a large screen; on a small one it folds to its
+     summary line and the legend and rail get the height (app.js sets `open`
+     from a media query) -->
+<details id="prov-box">
+  <summary>method &amp; provenance</summary>
+  <div id="provenance">
+  Argo (Ifremer ERDDAP), ascending casts, QC flags 1&ndash;2, 5-dbar bins. Field between casts:
+  anisotropic Gaussian kernel, L<sub>h</sub>&thinsp;=&thinsp;25&thinsp;km, L<sub>v</sub>&thinsp;=&thinsp;30&thinsp;dbar.
+  &ldquo;Support&rdquo; = normalised kernel weight, a geometry-only proxy, not a formal error.
+  Iso-surface and slices are cut from that same field, so all are limited by that kernel.
+  The pycnocline volume is not: it is the permanent (main) pycnocline, located in each cast's own 5-dbar N&sup2;
+  profile by the order of the stratification extrema after Feucher et al. (2016, 2019) &mdash; seasonal peak, mode-water
+  minimum, then the deep peak below it &mdash; with its top and base where N&sup2; falls to the slider's fraction of that
+  peak. The two depths are mapped between casts by objective analysis (Gauss-Markov), each on its own covariance
+  cross-validated over the casts, and each sheet is shaded by that analysis's normalised error variance rather than by
+  the kernel-weight proxy &mdash; scaled so that it reports the error the map is measured to make at a held-out cast
+  (7.2&times; on the base, 3.3&times; on the top), which is why it fades out where the casts are not. Two casts have no such structure at all and are dropped rather than forced.
+  Timeline on: casts also weighted exp(&minus;&Delta;t&sup2;/2L<sub>t</sub>&sup2;), two-sided (a completed record, so the
+  estimate at an instant uses casts either side of it), L<sub>t</sub> fitted from these casts.
+  The uncertainty-weight slider suppresses that encoding for comparison; below 1 the render overstates what was measured
+  and says so in the badge. <span id="prov-unc"></span>
+  </div>
+</details>
+
+<!-- mobile only: the panels that do not fit a phone's bottom edge are moved in
+     here by app.js and slide up over the scene. Empty and display:none on a
+     desktop, so it costs the normal layout nothing. -->
+<button id="sheet-btn" aria-expanded="false">Controls</button>
+<div id="sheet"></div>
+
+</div><!-- #hud -->
+
+<div id="focus"></div>
+<div id="draghint">&#9664; drag &#9654;</div>
+<div id="readout"></div>
+
+<script src="bathy.js"></script>
+<script src="data.js"></script>
+<script type="importmap">
+{
+  "imports": {
+    "three": "./vendor/three.module.min.js",
+    "three/addons/controls/OrbitControls.js": "./vendor/OrbitControls.js"
+  }
+}
+</script>
+<script type="module" src="app.js"></script>
+
+</body>
+</html>
