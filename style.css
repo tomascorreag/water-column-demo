@@ -186,7 +186,9 @@ body.showcase #gizmo,
 body.showcase #provenance,
 body.showcase #legend .keys,
 body.showcase #title .modes { display: none !important; }
-body.showcase #prov-short { display: block; font-size: 10.5px; color: var(--muted); line-height: 1.45; }
+body.showcase #prov-short { display: block; font-size: 10.5px; color: var(--muted); line-height: 1.45;
+  margin-top: 6px; max-width: 480px; }
+body.showcase #timeline { right: 14px; }
 body.showcase #tour { top: 92px; width: 360px; max-height: calc(100vh - 380px); overflow-y: auto; }
 body.showcase #tour-cap { font-size: 13.5px; line-height: 1.6; }
 body.showcase #tour-steps, body.showcase #tour-cap { display: none; }

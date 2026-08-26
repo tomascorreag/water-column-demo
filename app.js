@@ -43,6 +43,8 @@ if (SHOWCASE) {
     // the timeline is fixed-positioned but lives inside #rightcol, whose reveal
     // transform makes it the containing block mid-transition: pull it out
     document.getElementById('rightcol').before(document.getElementById('timeline'));
+    // the source line reads as a footnote to the title, not as a corner of its own
+    document.getElementById('title').append(document.getElementById('prov-short'));
   }
   document.querySelector('#title h1').textContent = 'Water column walkthrough';
   document.querySelector('#title .sub').textContent =
@@ -3203,11 +3205,9 @@ function ftueShow(i, manual = false) {
   $('g-num').textContent = String(Math.min(i + 1, FTUE.length)).padStart(2, '0');
   $('ftue-back').style.visibility = i > 0 ? 'visible' : 'hidden';
   if (i >= FTUE.length) {
+    // the walk is over: the last toggle appears and the guide leaves
     reveal(6);
-    $('ftue-text').innerHTML = 'One layer left: <b>Sea floor</b> puts these profiles against ' +
-      'the five kilometres of water they sit in.';
-    $('g-foot').style.display = 'none';
-    $('g-num').textContent = 'END';
+    $('guide').classList.remove('in');
     return;
   }
   if (i === 3) ftueT0 = TIME.t;
@@ -3514,8 +3514,6 @@ if (SHOWCASE) {
   // and no support to encode, so it owns its own state
   $('sc-bathy').addEventListener('change', () => {
     setBathy($('sc-bathy').checked);
-    // the last thing the guide asks for; once done it has nothing left to say
-    if ($('sc-bathy').checked && ftueStep >= FTUE.length) $('guide').classList.remove('in');
   });
   $('ftue-next').addEventListener('click', () => ftueShow(ftueStep + 1));
   $('ftue-back').addEventListener('click', () => ftueShow(Math.max(0, ftueStep - 1), true));
@@ -3524,7 +3522,6 @@ if (SHOWCASE) {
   $('ftue-skip').addEventListener('click', () => {
     ftueShow(FTUE.length);
     revealAll();
-    $('guide').classList.remove('in');
   });
   $('ic-skip').addEventListener('click', introSkip);
   $('ic-go').addEventListener('click', introClick);
