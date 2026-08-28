@@ -478,20 +478,28 @@ body.showcase #callout {
   #exag-badge, #unc-badge { left: calc(var(--edge-x) + var(--left-w) + var(--gap)); translate: 0 0; }
 }
 
-/* short: the showcase legend moves to the bottom right so the guide, the
-   toggles and the plots have the left column to themselves */
+/* short: the console legend drops its key */
 @media (max-height: 859px) {
-  body.showcase #hud {
-    grid-template-rows: auto minmax(0, 1fr) auto auto;
-    grid-template-areas:
-      "title  top    guide"
-      ".      .      guide"
-      "tour   .      guide"
-      "insets tl     legend";
-  }
-  body.showcase #legend { justify-self: end; }
   #legend .keys { display: none; }
 }
+
+/* The showcase legend moves to the bottom right when the left column runs out
+   of height for it, so the guide, the toggles and the plots keep that column
+   to themselves. Which viewport that is is NOT a height: every panel in the
+   column is sized in rem and the root font-size follows the viewport *width*,
+   so the stack needs ~660 px at 1400 across and ~870 at 2700, and the one
+   constant that used to sit here (859) was right at the wide end and moved
+   the ramp out of a column it still fitted in comfortably everywhere else.
+   `placeLegend()` in app.js measures the column and sets the class. */
+body.showcase.legend-bottom #hud {
+  grid-template-rows: auto minmax(0, 1fr) auto auto;
+  grid-template-areas:
+    "title  top    guide"
+    ".      .      guide"
+    "tour   .      guide"
+    "insets tl     legend";
+}
+body.showcase.legend-bottom #legend { justify-self: end; }
 @media (max-height: 699px) {
   :root { --plot-h: 11.5rem; }
   #insets .hint { display: none; }
