@@ -2444,8 +2444,8 @@ function drawLegend() {
     return;
   }
   document.getElementById('lg-note').textContent = (SHOWCASE
-    ? 'A measured profile gets the full colour range. Anything filled in between profiles loses colours as the evidence for it thins — fewer, greyer steps, then nothing.'
-    : 'Bottom row = full ramp (measured tubes use it continuously). Interpolated layers climb the tree as support falls — fewer, greyer steps, then nothing.') + uncNote();
+    ? 'A measured profile gets the full colour range. Anything filled in between profiles loses colours as the evidence for it thins — greyer means less certainty.'
+    : 'Bottom row = full ramp (measured tubes use it continuously). Interpolated layers climb the tree as support falls — greyer means less certainty.') + uncNote();
   // rows: layer L-1 (1 bin, neutral) at the top ... layer 0 (16 bins) at the bottom
   for (let layer = VSUP_LAYERS - 1; layer >= 0; layer--) {
     const y = top + (VSUP_LAYERS - 1 - layer) * rowH;
