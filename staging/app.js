@@ -2683,7 +2683,10 @@ $('sl-iso').addEventListener('input', () => {
   const [lo, hi] = isoRange();
   setIso(lo + (+$('sl-iso').value / 1000) * (hi - lo));
 });
-$('tg-thermo').addEventListener('change', () => { THERMO.on = $('tg-thermo').checked; buildThermo(); });
+$('tg-thermo').addEventListener('change', () => {
+  THERMO.on = $('tg-thermo').checked; buildThermo();
+  if (THERMO.on) thermoOnAt = performance.now();
+});
 $('sl-thermo').addEventListener('input', () => {
   THERMO.frac = +$('sl-thermo').value / 100;         // 25..80 -> 0.25..0.80 of peak N^2
   $('v-thermo').textContent = THERMO.frac.toFixed(2);
@@ -3355,15 +3358,15 @@ renderer.domElement.addEventListener('pointermove', ev => {
   showReadout(ev);
 });
 // the controls step clears itself when both gestures have actually been used
-renderer.domElement.addEventListener('pointermove', ev => { if (ev.buttons) navDrag = true; });
-renderer.domElement.addEventListener('wheel', () => { navZoom = true; }, { passive: true });
+renderer.domElement.addEventListener('pointermove', ev => { if (ev.buttons) navDragAt = performance.now(); });
+renderer.domElement.addEventListener('wheel', () => { navZoomAt = performance.now(); }, { passive: true });
 // pinch is the touch dolly and fires no wheel event, so the zoom half of that
 // step is read off the camera distance instead of off the gesture
 let navDist = null;
 controls.addEventListener('change', () => {
   const d = controls.getDistance();
   if (navDist == null) { navDist = d; return; }
-  if (Math.abs(d - navDist) / navDist > 0.08) { navZoom = true; navDist = d; }
+  if (Math.abs(d - navDist) / navDist > 0.08) { navZoomAt = performance.now(); navDist = d; }
 });
 let downPos = null;
 renderer.domElement.addEventListener('pointerdown', ev => {
@@ -3400,7 +3403,8 @@ renderer.domElement.addEventListener('pointerup', ev => {
   if (pk && pk.kind === 'cast') {
     const ci = pk.hit.object.userData.ci;
     const at = pins.indexOf(ci);
-    if (at >= 0) pins.splice(at, 1); else { if (pins.length >= 3) pins.shift(); pins.push(ci); }
+    if (at >= 0) pins.splice(at, 1);
+    else { if (pins.length >= 3) pins.shift(); pins.push(ci); pinAt = performance.now(); }
     syncPins();
   }
 });
@@ -3600,8 +3604,18 @@ function revealAll() {
 let introHiding = false;                           // tubes held back for the map shot
 let ftueStep = -1, ftueT0 = 0;
 
-let navDrag = false, navZoom = false;              // set by the canvas listeners below
+// When each action was last performed, against `ftueMark`, when the card
+// asking for it went up. Timestamps and not flags, because a gesture made
+// while an earlier card was showing is not this card's action: the viewer has
+// to do it again with the instruction in front of them, and a latched flag or
+// a state test (`pins.length > 0`, the checkbox being checked) would clear the
+// card the frame it appeared. `performance.now()` starts above 0, so an action
+// never predates the first mark by accident.
+let navDragAt = 0, navZoomAt = 0, pinAt = 0, thermoOnAt = 0, ftueMark = 0;
 
+// how long a card stays up after its action, so the viewer sees what the
+// action did before the text moves on
+const LINGER = 3500;
 const FTUE = [
   {
     text: () => `Each cast is shown by a <b>tube</b>: its temperature profile from two kilometres down to the ` +
@@ -3612,7 +3626,7 @@ const FTUE = [
       ? `<b>Drag with one finger</b> to turn the volume. <b>Pinch</b> to move closer or further out. `
       : `<b>Drag</b> to turn the volume. <b>Scroll</b> to move closer or further out. `) +
       `Depth is stretched <kbd>×200</kbd>.`,
-    done: () => navDrag && navZoom, linger: 2500
+    done: () => navDragAt > ftueMark && navZoomAt > ftueMark, linger: LINGER
   },
   {
     text: () => (MOBILE
@@ -3620,16 +3634,17 @@ const FTUE = [
       `Up to three at once; tap a plotted one again to drop it.`
       : `<b>Click a tube</b> to plot it against all ${casts.length}. Up to three at once. ` +
       `Hover one to read what it measured at that depth.`),
-    done: () => pins.length > 0, linger: 2500
+    done: () => pinAt > ftueMark, linger: LINGER
   },
   {
     text: () => `<b>Drag the playhead</b> <i class="ph-glyph"></i> along the timeline, left and right. ` +
       `A cast fades as the playhead moves away from it.`,
-    done: () => Math.abs(TIME.t - ftueT0) > 0.4, linger: 2500
+    arm: () => { ftueT0 = TIME.t; },
+    done: () => Math.abs(TIME.t - ftueT0) > 0.4, linger: LINGER
   },
   {
     text: () => `<b>Switch on Main thermocline.</b> Most of the temperature drop happens inside that one layer.`,
-    done: () => $('tg-thermo').checked
+    done: () => thermoOnAt > ftueMark
   },
 ];
 // Step 00. The register is deliberately flatter than the steps that follow:
@@ -3746,7 +3761,8 @@ function ftueShow(i, manual = false) {
     guideNudge();
     return;
   }
-  if (i === 3) ftueT0 = TIME.t;
+  ftueMark = performance.now();
+  if (FTUE[i].arm) FTUE[i].arm();
   $('ftue-text').innerHTML = FTUE[i].text();
   $('ftue-dots').innerHTML = FTUE.map((_, k) =>
     `<i class="${k === i ? 'on' : k < i ? 'past' : ''}"></i>`).join('');
