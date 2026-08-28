@@ -4323,6 +4323,41 @@ function frameForViewport() {
 // a stale one (the timeline's playhead used to be drawn at one width and
 // dragged at another); and the showcase view shift. Coalesced to one run per
 // frame, and run once here after the URL parameters have set the mode.
+// Where the showcase's colour ramp goes is a measurement, like placeCompass().
+// The left column is title / free row / toggles / ramp / plots, and every one
+// of those is sized in rem while the root font-size follows the viewport
+// *width* -- the stack wants ~660 px of height at 1400 across and ~870 at
+// 2700. A single height breakpoint (859) was therefore right only at the wide
+// end and pushed the ramp into the bottom right of every ordinary laptop
+// window, which has room for it. Sum the intrinsic heights instead and move it
+// only when the free row would be squeezed under LEGEND_SLACK.
+//
+// It is not monotonic in height, and that is the plots' 699 px breakpoint, not
+// this: over a ~60 px band the column is short of room, and just under 699 the
+// plots shrink and it has room again.
+//
+// The sum does not depend on the answer: nothing in that column stretches
+// (#title is align-self:start, the toggles, ramp and plots are align-self:end),
+// so each panel measures the same in either layout and the class cannot
+// oscillate. Below 1200 px across the ramp is hidden outright and the class
+// must come off, or its template would reserve a column for a panel that is
+// not drawn.
+const LEGEND_SLACK = 48;
+function placeLegend() {
+  if (!SHOWCASE) return;
+  const legend = $('legend');
+  if (MOBILE || getComputedStyle(legend).display === 'none') {
+    document.body.classList.remove('legend-bottom');
+    return;
+  }
+  const hs = getComputedStyle($('hud'));
+  const gap = parseFloat(hs.rowGap) || 0;
+  const need = parseFloat(hs.paddingTop) + parseFloat(hs.paddingBottom) + 4 * gap
+    + $('title').offsetHeight + $('tour').offsetHeight
+    + legend.offsetHeight + $('insets').offsetHeight;
+  document.body.classList.toggle('legend-bottom', innerHeight - need < LEGEND_SLACK);
+}
+
 const PROV_OPEN_MQ = matchMedia('(min-width: 1440px) and (min-height: 860px)');
 let provOpenWas = null, layoutQueued = false;
 function relayout() {
@@ -4341,7 +4376,8 @@ function relayout() {
   // the note is open on a big screen and folded on a small one; a manual
   // toggle stands until the viewport crosses the line again
   if (PROV_OPEN_MQ.matches !== provOpenWas) { provOpenWas = PROV_OPEN_MQ.matches; $('prov-box').open = provOpenWas; }
-  sizeInsets(); drawInsets(); drawLegend(); drawTimeline();
+  sizeInsets(); placeLegend();
+  drawInsets(); drawLegend(); drawTimeline();
   placeCompass();
   computeViewShift();
   if (introT0 == null || introDone) { scShift.x = scBase.x; scShift.y = scBase.y; }
