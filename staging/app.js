@@ -3733,12 +3733,13 @@ function ftueShow(i, manual = false) {
     return;
   }
   if (i >= FTUE.length) {
-    // the closing card: what is left to do, with no step attached to it
+    // the closing card: no step attached to it, and nothing left to instruct.
+    // The steps taught the controls; this one names the thing and hands it over.
     reveal('end');
     $('g-num').textContent = 'END';
     $('ftue-dots').innerHTML = FTUE.map(() => '<i class="past"></i>').join('');
-    $('ftue-text').innerHTML = 'That is the walkthrough. <b>Press play</b> to run the month, ' +
-      'switch on <b>Sea floor</b> to see how deep the water under these profiles goes, and keep turning it.';
+    $('ftue-text').innerHTML = 'This is <b>Salinotype</b>, navigate it and explore new dimensions ' +
+      'of oceanographic data.';
     $('ftue-back').style.visibility = 'hidden';
     $('ftue-skip').style.display = 'none';
     $('ftue-next').textContent = 'done';
