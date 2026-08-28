@@ -2154,8 +2154,10 @@ function paintField(big, W, H, sample) {
     const small = document.createElement('canvas'), mask = document.createElement('canvas');
     small.width = mask.width = W; small.height = mask.height = H;
     const sctx = small.getContext('2d'), mctx = mask.getContext('2d');
-    S = { W, H, small, sctx, img: sctx.createImageData(W, H), mask, mctx, mimg: mctx.createImageData(W, H),
-      vals: new Float32Array(W * H), sup: new Float32Array(W * H), insideAny: new Uint8Array(W * H) };
+    S = {
+      W, H, small, sctx, img: sctx.createImageData(W, H), mask, mctx, mimg: mctx.createImageData(W, H),
+      vals: new Float32Array(W * H), sup: new Float32Array(W * H), insideAny: new Uint8Array(W * H)
+    };
     PF.set(big, S);
   }
   const { vals, sup, insideAny, img, mimg, sctx } = S;
@@ -3603,7 +3605,7 @@ let navDrag = false, navZoom = false;              // set by the canvas listener
 const FTUE = [
   {
     text: () => `Each cast is shown by a <b>tube</b>: its temperature profile from two kilometres down to the ` +
-      `surface; <b>warm at the top, cold below</b>. ${casts.length} casts, one month.`
+      `surface; <b>warm at the top, cold below</b>. ${casts.length} Argo casts over one month in the North Atlantic.`
   },
   {
     text: () => (MOBILE
@@ -3615,15 +3617,14 @@ const FTUE = [
   {
     text: () => (MOBILE
       ? `<b>Tap a tube</b> to plot it against all ${casts.length} and read what it measured where you touched it. ` +
-        `Up to three at once; tap a plotted one again to drop it.`
+      `Up to three at once; tap a plotted one again to drop it.`
       : `<b>Click a tube</b> to plot it against all ${casts.length}. Up to three at once. ` +
-        `Hover one to read what it measured at that depth.`),
+      `Hover one to read what it measured at that depth.`),
     done: () => pins.length > 0, linger: 2500
   },
   {
     text: () => `<b>Drag the playhead</b> <i class="ph-glyph"></i> along the timeline, left and right. ` +
-      `A cast fades as the playhead moves away from it: ` +
-      `near the surface this ocean rearranges itself in about a week.`,
+      `A cast fades as the playhead moves away from it.`,
     done: () => Math.abs(TIME.t - ftueT0) > 0.4, linger: 2500
   },
   {
@@ -3639,9 +3640,7 @@ const FTUE = [
 // over-claim stops believing the rest.
 const DISCLAIMER =
   `<b>This is a concept, not a working tool.</b> The data is real and public, but every ` +
-  `representation of it here is conceptual: a sketch of what such a tool could be, made ` +
-  `for the OceanX Science Impact Challenge. Nothing on screen should be read as an ` +
-  `accurate picture of this ocean. <b>No OceanX data is used.</b>`;
+  `representation of it here is conceptual. <b>No OceanX data is used.</b>`;
 
 // what the ring should be pointing at on each step; a cast is projected from
 // the scene, everything else is a control that can be found in the DOM
